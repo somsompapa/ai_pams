@@ -1,4 +1,4 @@
-.PHONY: install test lint typecheck check
+.PHONY: install test lint typecheck check serve
 
 install:
 	pip install -e ".[dev]"
@@ -14,3 +14,6 @@ typecheck:
 	mypy src
 
 check: lint typecheck test
+
+serve:
+	python -m pams.interfaces.api

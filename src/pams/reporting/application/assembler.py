@@ -8,12 +8,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal
 
 from pams.ips.domain import ComplianceReport, RuleEvaluation
 from pams.performance.domain import PerformanceReport
 from pams.portfolio.domain import PortfolioSnapshot
 from pams.rebalancing.domain import RebalancingProposal, TradeDirection
+from pams.reporting.application.formatting import (
+    asset_class_label,
+    format_metric,
+    format_money,
+    format_percent,
+    metric_label,
+)
 from pams.reporting.domain import (
     Block,
     KeyValueBlock,
@@ -23,54 +29,6 @@ from pams.reporting.domain import (
     TableBlock,
 )
 from pams.risk.domain import RiskReport
-from pams.shared_kernel.domain import Money, Percentage
-
-_ASSET_CLASS_LABELS = {
-    "domestic_stock": "국내주식",
-    "us_stock": "미국주식",
-    "etf": "ETF",
-    "bond": "채권",
-    "cash": "현금",
-    "deposit": "예수금",
-    "foreign_currency": "외화",
-    "gold": "금",
-    "pension": "연금",
-    "crypto": "가상자산",
-}
-
-_METRIC_LABELS = {
-    "mdd": "최대낙폭(MDD)",
-    "drawdown": "현재 낙폭",
-    "cagr": "CAGR",
-    "volatility": "변동성(연환산)",
-    "sharpe": "Sharpe Ratio",
-    "sortino": "Sortino Ratio",
-    "calmar": "Calmar Ratio",
-    "var": "VaR",
-    "cvar": "CVaR",
-    "beta": "Beta",
-    "alpha": "Alpha",
-    "correlation": "상관계수",
-    "tracking_error": "추적오차",
-    "concentration_hhi": "집중도(HHI)",
-}
-
-_RATIO_METRICS = {"mdd", "drawdown", "cagr", "volatility", "var", "cvar", "alpha", "tracking_error"}
-
-
-def _money(money: Money) -> str:
-    quantized = money.round_to(0).amount
-    return f"{quantized:,.0f} {money.currency}"
-
-
-def _pct(value: Percentage | Decimal) -> str:
-    ratio = value.ratio if isinstance(value, Percentage) else value
-    percent = (ratio * 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    return f"{percent}%"
-
-
-def _number(value: Decimal) -> str:
-    return str(value.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,12 +64,12 @@ class AssembleInvestmentReport:
         performance: PerformanceReport | None,
     ) -> Section:
         items: list[tuple[str, str]] = [
-            ("총자산", _money(snapshot.total_value)),
-            ("평가손익", _money(snapshot.total_unrealized_pnl)),
-            ("실현손익", _money(snapshot.total_realized_pnl)),
+            ("총자산", format_money(snapshot.total_value)),
+            ("평가손익", format_money(snapshot.total_unrealized_pnl)),
+            ("실현손익", format_money(snapshot.total_realized_pnl)),
         ]
         if performance is not None:
-            items.append(("누적수익률(TWR)", _pct(performance.cumulative_twr)))
+            items.append(("누적수익률(TWR)", format_percent(performance.cumulative_twr)))
         if compliance is not None:
             violations = len(compliance.violations)
             status = "준수" if compliance.is_compliant else f"위반 {violations}건"
@@ -121,7 +79,7 @@ class AssembleInvestmentReport:
     @staticmethod
     def _allocation(snapshot: PortfolioSnapshot) -> Section:
         rows = tuple(
-            (_ASSET_CLASS_LABELS.get(asset_class.value, asset_class.value), _pct(weight))
+            (asset_class_label(asset_class.value), format_percent(weight))
             for asset_class, weight in sorted(
                 snapshot.weights_by_asset_class().items(),
                 key=lambda item: item[1].ratio,
@@ -150,11 +108,9 @@ class AssembleInvestmentReport:
 
     @staticmethod
     def _risk(risk: RiskReport) -> Section:
-        items = []
-        for name, value in risk.metrics.items():
-            label = _METRIC_LABELS.get(name, name)
-            rendered = _pct(value) if name in _RATIO_METRICS else _number(value)
-            items.append((label, rendered))
+        items = [
+            (metric_label(name), format_metric(name, value)) for name, value in risk.metrics.items()
+        ]
         return Section(heading="리스크 지표", blocks=(KeyValueBlock(items=tuple(items)),))
 
     @staticmethod
@@ -168,20 +124,20 @@ class AssembleInvestmentReport:
             )
         rows = tuple(
             (
-                _ASSET_CLASS_LABELS.get(action.asset_class.value, action.asset_class.value),
+                asset_class_label(action.asset_class.value),
                 "매도" if action.direction is TradeDirection.SELL else "매수",
-                _money(action.amount),
-                _pct(action.current_weight),
-                _pct(action.target_weight),
-                _money(action.estimated_cost),
+                format_money(action.amount),
+                format_percent(action.current_weight),
+                format_percent(action.target_weight),
+                format_money(action.estimated_cost),
             )
             for action in proposal.actions
         )
         summary = KeyValueBlock(
             items=(
-                ("총 매도", _money(proposal.total_sell_amount)),
-                ("총 매수", _money(proposal.total_buy_amount)),
-                ("예상 총비용", _money(proposal.total_estimated_cost)),
+                ("총 매도", format_money(proposal.total_sell_amount)),
+                ("총 매수", format_money(proposal.total_buy_amount)),
+                ("예상 총비용", format_money(proposal.total_estimated_cost)),
             )
         )
         table = TableBlock(
@@ -192,24 +148,28 @@ class AssembleInvestmentReport:
 
     @staticmethod
     def _performance(performance: PerformanceReport) -> Section:
-        items: list[tuple[str, str]] = [("누적수익률(TWR)", _pct(performance.cumulative_twr))]
+        items: list[tuple[str, str]] = [
+            ("누적수익률(TWR)", format_percent(performance.cumulative_twr))
+        ]
         if performance.cumulative_benchmark_twr is not None:
-            items.append(("벤치마크 누적", _pct(performance.cumulative_benchmark_twr)))
+            items.append(("벤치마크 누적", format_percent(performance.cumulative_benchmark_twr)))
         if performance.cumulative_excess is not None:
-            items.append(("누적 초과수익", _pct(performance.cumulative_excess)))
+            items.append(("누적 초과수익", format_percent(performance.cumulative_excess)))
         if performance.win_rate is not None:
-            items.append(("승률", _pct(performance.win_rate)))
+            items.append(("승률", format_percent(performance.win_rate)))
         if performance.compliance_rate is not None:
-            items.append(("규칙 준수율", _pct(performance.compliance_rate)))
+            items.append(("규칙 준수율", format_percent(performance.compliance_rate)))
 
         blocks: list[Block] = [KeyValueBlock(items=tuple(items))]
         if performance.monthly:
             rows = tuple(
                 (
                     period.label,
-                    _pct(period.twr),
-                    _pct(period.benchmark_twr) if period.benchmark_twr is not None else "-",
-                    _pct(period.excess) if period.excess is not None else "-",
+                    format_percent(period.twr),
+                    format_percent(period.benchmark_twr)
+                    if period.benchmark_twr is not None
+                    else "-",
+                    format_percent(period.excess) if period.excess is not None else "-",
                 )
                 for period in performance.monthly
             )

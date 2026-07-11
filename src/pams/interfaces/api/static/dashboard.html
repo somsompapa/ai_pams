@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PAMS 대시보드</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#10151c">
+<link rel="apple-touch-icon" href="/static/pams-192.png">
 <style>
   :root {
     --bg: #f5f6f8; --card: #ffffff; --text: #1c2733; --muted: #66707d;
@@ -306,6 +309,7 @@ el("ai-run").addEventListener("click", async () => {
 
 load();
 loadJournal();
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
 </script>
 </body>
 </html>

@@ -10,14 +10,16 @@ AI 해설은 TextCompletion 구현이 있어야 동작한다:
 
 from __future__ import annotations
 
+import base64
 import os
+import secrets
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -34,7 +36,7 @@ from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
 from pams.shared_kernel.domain import Currency, DomainError
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+_PROJECT_ROOT = Path(os.environ.get("PAMS_ROOT") or Path(__file__).resolve().parents[4])
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _DEFAULT_AI_MODEL = "claude-sonnet-5"
 
@@ -126,21 +128,49 @@ def _facts_from_dashboard(data: dict[str, Any]) -> list[str]:
     return facts
 
 
+def _authorized(header: str | None, password: str) -> bool:
+    if not header or not header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header[6:]).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    _username, _sep, provided = decoded.partition(":")
+    return secrets.compare_digest(provided, password)
+
+
 def create_app(
     service: DashboardService | None = None,
     *,
     data_dir: Path | None = None,
     completion: TextCompletion | None = None,
     as_of_provider: Callable[[], date] | None = None,
+    password: str | None = None,
 ) -> FastAPI:
     dashboard_service = service if service is not None else default_dashboard_service()
     as_of = as_of_provider if as_of_provider is not None else _default_as_of
+    access_password = (
+        password if password is not None else os.environ.get("PAMS_PASSWORD", "").strip() or None
+    )
     storage_dir = data_dir if data_dir is not None else _PROJECT_ROOT / "data"
     journal_repository = JsonlJournalRepository(storage_dir / "journal.jsonl")
     audit_recorder = RecordAuditEvent(trail=JsonlAuditTrail(storage_dir / "audit.jsonl"))
     text_completion = completion if completion is not None else _completion_from_env()
 
     app = FastAPI(title="PAMS", version="0.1.0")
+
+    if access_password is not None:
+        configured_password = access_password
+
+        @app.middleware("http")
+        async def basic_auth(
+            request: Request, call_next: Callable[[Request], Awaitable[Response]]
+        ) -> Response:
+            if request.url.path == "/api/health" or _authorized(
+                request.headers.get("Authorization"), configured_password
+            ):
+                return await call_next(request)
+            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="PAMS"'})
 
     @app.exception_handler(DomainError)
     def domain_error_handler(_request: Any, error: DomainError) -> Any:
@@ -239,5 +269,20 @@ def create_app(
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
         return FileResponse(_STATIC_DIR / "dashboard.html", media_type="text/html")
+
+    @app.get("/manifest.json", include_in_schema=False)
+    def manifest() -> FileResponse:
+        return FileResponse(_STATIC_DIR / "manifest.json", media_type="application/manifest+json")
+
+    @app.get("/sw.js", include_in_schema=False)
+    def service_worker() -> FileResponse:
+        return FileResponse(_STATIC_DIR / "sw.js", media_type="text/javascript")
+
+    @app.get("/static/{filename}", include_in_schema=False)
+    def static_file(filename: str) -> FileResponse:
+        target = (_STATIC_DIR / filename).resolve()
+        if not target.is_file() or target.parent != _STATIC_DIR.resolve():
+            raise HTTPException(status_code=404)
+        return FileResponse(target)
 
     return app

@@ -70,4 +70,20 @@ PAMS_MODE=real make serve
 PAMS_MODE=real PAMS_HOST=0.0.0.0 make serve   # 폰에서 http://<PC 내부IP>:8000
 ```
 
+## 서버에 항상 켜두기 (홈서버/VPS)
+
+PC를 켜두기 싫다면 라즈베리파이·미니PC 또는 VPS에 Docker로 올린다:
+
+```bash
+docker build -t pams .
+docker run -d --name pams --restart unless-stopped -p 8000:8000 \
+  -v $(pwd)/data:/app/data \
+  -e PAMS_MODE=real -e PAMS_PASSWORD=강한비밀번호 pams
+```
+
+- `PAMS_PASSWORD`를 설정하면 모든 화면/API에 로그인이 필요하다.
+- 외부 접속은 서버를 인터넷에 공개하는 대신 **Tailscale**(서버·폰에 설치)을 권장한다.
+- 폰 브라우저에서 접속 후 "홈 화면에 추가"하면 앱처럼 설치된다(PWA).
+- 일별 적재는 서버 crontab에 등록한다: `0 18 * * 1-5 docker exec pams python -m pams.interfaces.cli snapshot`
+
 상세 설계는 [`docs/architecture.md`](docs/architecture.md)를 참고.

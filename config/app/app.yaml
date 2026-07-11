@@ -1,0 +1,14 @@
+# PAMS 전역 애플리케이션 설정
+# 투자 규칙(IPS/Rule)은 여기 두지 않는다 - config/ips, config/rules 를 참고.
+
+app:
+  name: "PAMS"
+  environment: local  # local | dev | prod
+
+logging:
+  level: INFO
+  audit_enabled: true  # 모든 행동을 감사 로그로 기록할지 여부
+
+locale:
+  base_currency: KRW
+  timezone: "Asia/Seoul"

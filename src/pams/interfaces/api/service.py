@@ -50,10 +50,10 @@ class DashboardService:
     prices: PriceLookup
     fx: FxLookup
     portfolio_values: ValueSeries
-    benchmark_values: ValueSeries
     performance_history: PerformanceHistory
-    benchmark_history: PerformanceHistory
-    market_metrics: dict[str, Decimal]  # 예: {"vix": 24.5} - market_data 어댑터 연동 전 데모
+    market_metrics: dict[str, Decimal]  # 예: {"vix": Decimal("24.5")} - 시장 지표
+    benchmark_values: ValueSeries | None = None  # 없으면 벤치마크 비교 지표 생략
+    benchmark_history: PerformanceHistory | None = None
 
     def build(self, *, as_of: date, base_currency: Currency) -> dict[str, Any]:
         policy = YamlPolicyRepository(

@@ -11,6 +11,7 @@ from pams.performance.domain.history import (
     PerformanceHistory,
     ValuationPoint,
 )
+from pams.performance.domain.ports import ValueHistoryRepository
 
 __all__ = [
     "PerformanceCalculationError",
@@ -20,4 +21,5 @@ __all__ = [
     "PeriodPerformance",
     "PeriodType",
     "ValuationPoint",
+    "ValueHistoryRepository",
 ]

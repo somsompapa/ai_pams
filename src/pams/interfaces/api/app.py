@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -51,7 +52,16 @@ class AnalysisRequest(BaseModel):
     note: str | None = None
 
 
+def _is_real_mode() -> bool:
+    return os.environ.get("PAMS_MODE", "demo").strip().lower() == "real"
+
+
 def default_dashboard_service() -> DashboardService:
+    """PAMS_MODE=real이면 data/·config/ 파일 기반, 아니면 데모 데이터."""
+    if _is_real_mode():
+        from pams.interfaces.wiring import real_dashboard_service
+
+        return real_dashboard_service(_PROJECT_ROOT)
     return DashboardService(
         config_dir=_PROJECT_ROOT / "config",
         transactions=demo.DemoTransactionRepository(),
@@ -59,11 +69,16 @@ def default_dashboard_service() -> DashboardService:
         prices=demo.DemoPriceLookup(),
         fx=demo.DemoFxLookup(),
         portfolio_values=demo.demo_value_series(),
-        benchmark_values=demo.demo_benchmark_series(),
         performance_history=demo.demo_performance_history(),
-        benchmark_history=demo.demo_benchmark_history(),
         market_metrics={"vix": demo.DEMO_VIX},
+        benchmark_values=demo.demo_benchmark_series(),
+        benchmark_history=demo.demo_benchmark_history(),
     )
+
+
+def _default_as_of() -> date:
+    """데모 모드는 데모 기준일에 고정, 실데이터 모드는 오늘."""
+    return date.today() if _is_real_mode() else demo.AS_OF
 
 
 def _completion_from_env() -> TextCompletion | None:
@@ -116,8 +131,10 @@ def create_app(
     *,
     data_dir: Path | None = None,
     completion: TextCompletion | None = None,
+    as_of_provider: Callable[[], date] | None = None,
 ) -> FastAPI:
     dashboard_service = service if service is not None else default_dashboard_service()
+    as_of = as_of_provider if as_of_provider is not None else _default_as_of
     storage_dir = data_dir if data_dir is not None else _PROJECT_ROOT / "data"
     journal_repository = JsonlJournalRepository(storage_dir / "journal.jsonl")
     audit_recorder = RecordAuditEvent(trail=JsonlAuditTrail(storage_dir / "audit.jsonl"))
@@ -145,7 +162,7 @@ def create_app(
 
     @app.get("/api/dashboard")
     def dashboard() -> dict[str, Any]:
-        return dashboard_service.build(as_of=demo.AS_OF, base_currency=Currency.KRW)
+        return dashboard_service.build(as_of=as_of(), base_currency=Currency.KRW)
 
     @app.get("/api/journal")
     def list_journal() -> dict[str, Any]:
@@ -167,9 +184,10 @@ def create_app(
 
     @app.post("/api/journal", status_code=201)
     def record_journal(request: JournalRequest) -> dict[str, Any]:
+        today = as_of()
         entry = JournalEntry(
-            entry_id=f"{demo.AS_OF.isoformat()}-{uuid.uuid4().hex[:8]}",
-            entry_date=demo.AS_OF,
+            entry_id=f"{today.isoformat()}-{uuid.uuid4().hex[:8]}",
+            entry_date=today,
             title=request.title,
             what=request.what,
             why=request.why,
@@ -200,7 +218,7 @@ def create_app(
                 status_code=503,
                 detail="AI 해설을 사용할 수 없다 - ANTHROPIC_API_KEY를 설정하라",
             )
-        data = dashboard_service.build(as_of=demo.AS_OF, base_currency=Currency.KRW)
+        data = dashboard_service.build(as_of=as_of(), base_currency=Currency.KRW)
         narrative = GenerateAnalysis(completion=text_completion).execute(
             kind=AnalysisKind(request.kind),
             facts=_facts_from_dashboard(data),

@@ -106,3 +106,38 @@ class TestComputeRiskReportUseCase:
             portfolio_values=PORTFOLIO, parameters=PARAMS, benchmark_values=BENCHMARK
         )
         assert report.metrics["beta"] > 0
+
+
+class TestUndefinedMetricsAreOmitted:
+    """수학적으로 정의되지 않는 지표(하락 없는 시계열의 Sortino/Calmar 등)는
+    값을 지어내지 않고 생략한다. 규칙이 참조하는 drawdown/mdd는 항상 계산된다."""
+
+    RISING = ValueSeries.from_pairs(
+        [
+            (START, Decimal("100")),
+            (START + timedelta(days=1), Decimal("101")),
+            (START + timedelta(days=2), Decimal("102")),
+        ]
+    )
+
+    def test_rising_series_omits_undefined_ratios(self) -> None:
+        report = RiskEngine().analyze(portfolio_values=self.RISING, parameters=PARAMS)
+        assert "sortino" not in report.metrics  # 하방편차 0
+        assert "calmar" not in report.metrics  # MDD 0
+        assert report.metrics["mdd"] == Decimal(0)
+        assert report.metrics["drawdown"] == Decimal(0)
+        assert "volatility" in report.metrics and "var" in report.metrics
+
+    def test_flat_benchmark_omits_relative_metrics(self) -> None:
+        flat_benchmark = ValueSeries.from_pairs(
+            [
+                (START, Decimal("100")),
+                (START + timedelta(days=1), Decimal("100")),
+                (START + timedelta(days=2), Decimal("100")),
+            ]
+        )
+        report = RiskEngine().analyze(
+            portfolio_values=self.RISING, parameters=PARAMS, benchmark_values=flat_benchmark
+        )
+        assert "beta" not in report.metrics  # 벤치마크 분산 0
+        assert "mdd" in report.metrics

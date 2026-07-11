@@ -47,4 +47,27 @@ tests/           # unit / integration / e2e
 data/, reports/  # 로컬 캐시 및 생성된 리포트 (git 비추적)
 ```
 
+## 실데이터로 사용하기
+
+기본은 데모 데이터로 동작한다. 내 자산으로 전환하려면:
+
+```bash
+# 1. 데이터 파일 준비 (형식은 examples/ 참고)
+cp examples/transactions.csv data/   # 내 거래 내역으로 수정
+cp examples/prices.csv data/         # 시세 (매일 갱신)
+cp examples/fx.csv data/             # 환율 (외화 자산이 있을 때)
+cp examples/market.yaml data/        # 시장 지표 (vix 등)
+#    자산 목록은 config/assets/default.yaml 에 등록
+
+# 2. 일별 총자산 적재 (매일 실행 - cron 등록 권장. 과거일 백필도 가능)
+make snapshot
+python -m pams.interfaces.cli snapshot --date 2026-07-08   # 백필 예시
+
+# 3. 실데이터 모드로 대시보드 실행 (이력 3일 이상 필요)
+PAMS_MODE=real make serve
+
+# 같은 와이파이의 폰에서 보려면
+PAMS_MODE=real PAMS_HOST=0.0.0.0 make serve   # 폰에서 http://<PC 내부IP>:8000
+```
+
 상세 설계는 [`docs/architecture.md`](docs/architecture.md)를 참고.

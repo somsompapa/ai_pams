@@ -47,3 +47,34 @@ costs:
         )
         with pytest.raises(CostConfigError, match="real_estate"):
             YamlCostModelLoader(bad).load()
+
+
+class TestCapitalGainsConfig:
+    def test_default_us_stock_has_capital_gains(self) -> None:
+        model = YamlCostModelLoader(DEFAULT_PATH).load()
+        us = model.rates_for(AssetClass.US_STOCK)
+        assert us.capital_gains is not None
+        assert us.capital_gains.rate == Percentage.from_ratio("0.22")
+
+    def test_domestic_stock_has_no_capital_gains(self) -> None:
+        model = YamlCostModelLoader(DEFAULT_PATH).load()
+        assert model.rates_for(AssetClass.DOMESTIC_STOCK).capital_gains is None
+
+    def test_incomplete_capital_gains_rejected(self, tmp_path: Path) -> None:
+        bad = tmp_path / "costs.yaml"
+        bad.write_text(
+            """
+default:
+  fee_rate: "0"
+  sell_tax_rate: "0"
+costs:
+  - asset_class: us_stock
+    fee_rate: "0.0025"
+    sell_tax_rate: "0"
+    capital_gains:
+      rate: "0.22"
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(CostConfigError, match="annual_exemption"):
+            YamlCostModelLoader(bad).load()

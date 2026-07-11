@@ -8,8 +8,8 @@ from typing import Any
 
 import yaml
 
-from pams.rebalancing.domain import CostModel, TradingCostRates
-from pams.shared_kernel.domain import AssetClass, DomainError, Percentage
+from pams.rebalancing.domain import CapitalGainsTax, CostModel, TradingCostRates
+from pams.shared_kernel.domain import AssetClass, Currency, DomainError, Money, Percentage
 
 
 class CostConfigError(Exception):
@@ -69,4 +69,31 @@ class YamlCostModelLoader:
                     f"{where}.{key}: 숫자로 해석할 수 없다: {entry[key]!r}"
                 ) from None
 
-        return TradingCostRates(fee_rate=ratio("fee_rate"), sell_tax_rate=ratio("sell_tax_rate"))
+        return TradingCostRates(
+            fee_rate=ratio("fee_rate"),
+            sell_tax_rate=ratio("sell_tax_rate"),
+            capital_gains=YamlCostModelLoader._capital_gains(entry.get("capital_gains"), where),
+        )
+
+    @staticmethod
+    def _capital_gains(raw: Any, where: str) -> CapitalGainsTax | None:
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise CostConfigError(f"{where}.capital_gains: 매핑이어야 한다")
+        for key in ("rate", "annual_exemption", "currency"):
+            if key not in raw:
+                raise CostConfigError(f"{where}.capital_gains: 필수 항목 '{key}'가 없다")
+        try:
+            currency = Currency(str(raw["currency"]))
+        except ValueError:
+            raise CostConfigError(
+                f"{where}.capital_gains.currency: 알 수 없는 통화 {raw['currency']!r}"
+            ) from None
+        try:
+            return CapitalGainsTax(
+                rate=Percentage.from_ratio(Decimal(str(raw["rate"]))),
+                annual_exemption=Money.of(str(raw["annual_exemption"]), currency),
+            )
+        except InvalidOperation:
+            raise CostConfigError(f"{where}.capital_gains: 숫자로 해석할 수 없다") from None

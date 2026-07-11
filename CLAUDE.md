@@ -39,7 +39,7 @@ CI(GitHub Actions, `.github/workflows/ci.yml`)가 push/PR마다 `make check`를 
 
 ## 개발 진행 방식
 
-- Phase 1~10은 완료됐다(엔진 전부 + 실데이터 어댑터 + 인증/PWA/Docker + 보고서·알림 CLI). 후속 작업은 증권사/시세 API 연동(C1), 양도세 정밀화(C3) 등 포트 확장.
+- Phase 1~10은 완료됐다(엔진 전부 + 실데이터 어댑터 + 인증/PWA/Docker + 보고서·알림 CLI + 시세 자동수집 + 해외주식 양도세 정밀화). 후속 작업은 증권사 실시간 연동, 경제지표·뉴스 자동수집 등 포트 확장.
 - 각 작업은 요구사항 분석 → 설계 → 인터페이스(포트) → 테스트 → 구현 → 리팩토링 순서를 지킨다(Test First).
 - 금액 계산에는 float를 쓰지 않는다. `Decimal` 기반 값객체(shared_kernel)를 사용한다.
 - 새 데이터 소스는 기존 포트(예: `PriceLookup`, `TransactionRepository`)에 어댑터를 추가하는 방식으로 붙인다 — domain/application은 건드리지 않는다.

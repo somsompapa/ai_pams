@@ -189,3 +189,90 @@ class TestValidation:
             (b.amount.amount for b in buys), reverse=True
         )
         assert len(sells) == 2 and len(buys) == 2
+
+
+class TestCapitalGainsTax:
+    """해외주식 매도 시 차익 기반 양도세: (차익 - 연공제) × 세율.
+
+    시나리오: 총자산 10,000,000, 미국주식 목표 20%±0.
+    미국주식 현재 6,000,000(60%) → 4,000,000 매도. 매도비율 2/3.
+    """
+
+    from pams.rebalancing.domain import CapitalGainsTax
+
+    TARGETS_CG = (
+        target(AssetClass.US_STOCK, "20", "0"),
+        target(AssetClass.CASH, "80", "0"),
+    )
+
+    def costs_with_cg(self, exemption: str) -> CostModel:
+        from pams.rebalancing.domain import CapitalGainsTax
+
+        return CostModel(
+            rates={
+                AssetClass.US_STOCK: TradingCostRates(
+                    fee_rate=Percentage.from_ratio("0.0025"),
+                    sell_tax_rate=Percentage.zero(),
+                    capital_gains=CapitalGainsTax(
+                        rate=Percentage.from_ratio("0.22"),
+                        annual_exemption=Money.of(exemption, KRW),
+                    ),
+                )
+            },
+            default=TradingCostRates(fee_rate=Percentage.zero(), sell_tax_rate=Percentage.zero()),
+        )
+
+    def propose_cg(self, cost_basis: str, exemption: str = "2500000"):  # type: ignore[no-untyped-def]
+        return RebalancingEngine().propose(
+            as_of=AS_OF,
+            base_currency=KRW,
+            current_values={
+                AssetClass.US_STOCK: Money.of("6000000", KRW),
+                AssetClass.CASH: Money.of("4000000", KRW),
+            },
+            targets=self.TARGETS_CG,
+            costs=self.costs_with_cg(exemption),
+            cost_bases={AssetClass.US_STOCK: Money.of(cost_basis, KRW)},
+        )
+
+    def test_gain_below_exemption_no_capital_gains_tax(self) -> None:
+        # 취득원가 3,000,000 → 처분원가 2,000,000, 차익 2,000,000 < 공제 → 양도세 0
+        action = self.propose_cg("3000000").actions[0]
+        assert action.estimated_tax == Money.zero(KRW)
+        assert action.estimated_fee == Money.of("10000", KRW)  # 4,000,000 × 0.0025
+
+    def test_gain_above_exemption_taxed(self) -> None:
+        # 취득원가 1,500,000 → 처분원가 1,000,000, 차익 3,000,000
+        # 과세표준 3,000,000 - 2,500,000 = 500,000 × 0.22 = 110,000
+        action = self.propose_cg("1500000").actions[0]
+        assert action.estimated_tax == Money.of("110000", KRW)
+
+    def test_no_cost_basis_falls_back_to_transaction_tax_only(self) -> None:
+        """취득원가를 모르면 양도세를 추정하지 않는다 (거래세만)."""
+        proposal = RebalancingEngine().propose(
+            as_of=AS_OF,
+            base_currency=KRW,
+            current_values={
+                AssetClass.US_STOCK: Money.of("6000000", KRW),
+                AssetClass.CASH: Money.of("4000000", KRW),
+            },
+            targets=self.TARGETS_CG,
+            costs=self.costs_with_cg("2500000"),
+        )
+        assert proposal.actions[0].estimated_tax == Money.zero(KRW)  # sell_tax_rate=0
+
+    def test_buy_never_incurs_capital_gains(self) -> None:
+        proposal = RebalancingEngine().propose(
+            as_of=AS_OF,
+            base_currency=KRW,
+            current_values={
+                AssetClass.US_STOCK: Money.of("1000000", KRW),
+                AssetClass.CASH: Money.of("9000000", KRW),
+            },
+            targets=self.TARGETS_CG,
+            costs=self.costs_with_cg("2500000"),
+            cost_bases={AssetClass.US_STOCK: Money.of("500000", KRW)},
+        )
+        buy = proposal.actions[0]
+        assert buy.direction is TradeDirection.BUY
+        assert buy.estimated_tax == Money.zero(KRW)

@@ -13,7 +13,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import date
 
-from pams.rebalancing.domain.cost_model import CostModel
+from pams.rebalancing.domain.cost_model import CostModel, TradingCostRates
 from pams.rebalancing.domain.proposal import (
     RebalancingAction,
     RebalancingProposal,
@@ -38,6 +38,7 @@ class RebalancingEngine:
         current_values: Mapping[AssetClass, Money],
         targets: Sequence[AllocationTarget],
         costs: CostModel,
+        cost_bases: Mapping[AssetClass, Money] | None = None,
     ) -> RebalancingProposal:
         self._validate(current_values, targets)
         total = Money.zero(base_currency)
@@ -46,11 +47,12 @@ class RebalancingEngine:
         if not total.is_positive:
             raise DomainValidationError("총자산이 0 이하이면 리밸런싱을 제안할 수 없다")
 
+        cost_bases = cost_bases or {}
         actions = []
         for target in targets:
             if target.asset_class.is_cash_like:
                 continue
-            action = self._action_for(target, current_values, total, costs)
+            action = self._action_for(target, current_values, total, costs, cost_bases)
             if action is not None:
                 actions.append(action)
 
@@ -91,6 +93,7 @@ class RebalancingEngine:
         current_values: Mapping[AssetClass, Money],
         total: Money,
         costs: CostModel,
+        cost_bases: Mapping[AssetClass, Money],
     ) -> RebalancingAction | None:
         current_value = current_values.get(target.asset_class, Money.zero(total.currency))
         current_weight = Percentage.from_ratio(current_value.amount / total.amount)
@@ -104,11 +107,11 @@ class RebalancingEngine:
 
         rates = costs.rates_for(target.asset_class)
         fee = rates.fee_rate.of(amount)
-        tax = (
-            rates.sell_tax_rate.of(amount)
-            if direction is TradeDirection.SELL
-            else Money.zero(amount.currency)
-        )
+        tax = Money.zero(amount.currency)
+        if direction is TradeDirection.SELL:
+            tax = rates.sell_tax_rate.of(amount) + RebalancingEngine._capital_gains_tax(
+                rates, amount, current_value, cost_bases.get(target.asset_class)
+            )
         return RebalancingAction(
             asset_class=target.asset_class,
             direction=direction,
@@ -118,3 +121,22 @@ class RebalancingEngine:
             current_weight=current_weight,
             target_weight=target.target,
         )
+
+    @staticmethod
+    def _capital_gains_tax(
+        rates: TradingCostRates,
+        sell_amount: Money,
+        current_value: Money,
+        cost_basis: Money | None,
+    ) -> Money:
+        """매도분에 귀속되는 양도차익에 대한 예상 세금.
+
+        취득원가를 모르면(cost_basis is None) 차익을 추정할 수 없으므로 0을 반환한다.
+        처분되는 취득원가 = 취득원가 × (매도금액 / 현재평가액).
+        """
+        if rates.capital_gains is None or cost_basis is None or not current_value.is_positive:
+            return Money.zero(sell_amount.currency)
+        sold_ratio = sell_amount.amount / current_value.amount
+        cost_removed = Money(cost_basis.amount * sold_ratio, sell_amount.currency)
+        gain = sell_amount - cost_removed
+        return rates.capital_gains.on_gain(gain)

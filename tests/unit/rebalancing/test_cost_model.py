@@ -46,3 +46,48 @@ class TestCostModel:
         cost_rates = self.MODEL.rates_for(AssetClass.DOMESTIC_STOCK)
         assert cost_rates.fee_rate.of(amount) == Money.of("150", Currency.KRW)
         assert cost_rates.sell_tax_rate.of(amount) == Money.of("1800", Currency.KRW)
+
+
+class TestCapitalGainsTax:
+    def test_below_exemption_is_zero(self) -> None:
+        from pams.rebalancing.domain import CapitalGainsTax
+
+        tax = CapitalGainsTax(
+            rate=Percentage.from_ratio("0.22"),
+            annual_exemption=Money.of("2500000", Currency.KRW),
+        )
+        # 차익 2,000,000 < 공제 2,500,000 → 0
+        assert tax.on_gain(Money.of("2000000", Currency.KRW)) == Money.zero(Currency.KRW)
+
+    def test_above_exemption_taxes_excess(self) -> None:
+        from pams.rebalancing.domain import CapitalGainsTax
+
+        tax = CapitalGainsTax(
+            rate=Percentage.from_ratio("0.22"),
+            annual_exemption=Money.of("2500000", Currency.KRW),
+        )
+        # (3,000,000 - 2,500,000) × 0.22 = 110,000
+        assert tax.on_gain(Money.of("3000000", Currency.KRW)) == Money.of("110000", Currency.KRW)
+
+    def test_loss_is_not_taxed(self) -> None:
+        from pams.rebalancing.domain import CapitalGainsTax
+
+        tax = CapitalGainsTax(
+            rate=Percentage.from_ratio("0.22"),
+            annual_exemption=Money.of("2500000", Currency.KRW),
+        )
+        assert tax.on_gain(Money.of("-500000", Currency.KRW)) == Money.zero(Currency.KRW)
+
+    def test_negative_rate_or_exemption_rejected(self) -> None:
+        from pams.rebalancing.domain import CapitalGainsTax
+
+        with pytest.raises(DomainValidationError):
+            CapitalGainsTax(
+                rate=Percentage.from_ratio("-0.1"),
+                annual_exemption=Money.of("2500000", Currency.KRW),
+            )
+        with pytest.raises(DomainValidationError):
+            CapitalGainsTax(
+                rate=Percentage.from_ratio("0.22"),
+                annual_exemption=Money.of("-1", Currency.KRW),
+            )

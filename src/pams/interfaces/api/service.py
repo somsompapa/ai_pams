@@ -108,6 +108,7 @@ class DashboardService:
             base_currency=base_currency,
             current_values=_values_by_class(snapshot),
             targets=policy.targets,
+            cost_bases=_cost_by_class(snapshot),
         )
 
         performance = ComputePerformanceReport().execute(
@@ -296,3 +297,22 @@ def _values_by_class(snapshot: PortfolioSnapshot) -> dict[AssetClass, Money]:
     for cash in snapshot.cash_balances:
         add(AssetClass.DEPOSIT, cash.value_base)
     return values
+
+
+def _cost_by_class(snapshot: PortfolioSnapshot) -> dict[AssetClass, Money]:
+    """자산군별 취득원가(기준통화). 양도세 추정에 쓰인다 (현금성은 제외)."""
+    costs: dict[AssetClass, Money] = {}
+    for valuation in snapshot.valuations:
+        asset_class = valuation.asset.asset_class
+        if asset_class.is_cash_like:
+            continue
+        # cost_basis는 자산 통화 기준이므로 평가와 동일한 환율 스케일로 base로 환산한다:
+        # 원가_base = 원가_local × (시장가치_base / 시장가치_local). 원화 자산은 스케일 1.
+        local = valuation.market_value_local.amount
+        if local <= 0:
+            continue  # 수량 0 포지션 (원가도 0)
+        ratio = valuation.market_value_base.amount / local
+        cost_base = Money(valuation.position.cost_basis.amount * ratio, snapshot.base_currency)
+        current = costs.get(asset_class, Money.zero(snapshot.base_currency))
+        costs[asset_class] = current + cost_base
+    return costs

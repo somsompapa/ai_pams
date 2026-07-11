@@ -27,6 +27,7 @@ class ProposeRebalancing:
         base_currency: Currency,
         current_values: Mapping[AssetClass, Money],
         targets: Sequence[AllocationTarget],
+        cost_bases: Mapping[AssetClass, Money] | None = None,
     ) -> RebalancingProposal:
         return self.engine.propose(
             as_of=as_of,
@@ -34,4 +35,5 @@ class ProposeRebalancing:
             current_values=current_values,
             targets=targets,
             costs=self.costs,
+            cost_bases=cost_bases,
         )

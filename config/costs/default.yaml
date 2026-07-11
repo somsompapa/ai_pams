@@ -15,6 +15,10 @@ costs:
   - asset_class: us_stock
     fee_rate: "0.0025"       # 해외주식 수수료 (예시)
     sell_tax_rate: "0"       # SEC fee는 미미하여 0으로 근사
+    capital_gains:           # 해외주식 양도소득세: (차익 - 연 250만) × 22%
+      rate: "0.22"
+      annual_exemption: "2500000"
+      currency: KRW
   - asset_class: etf
     fee_rate: "0.00015"
     sell_tax_rate: "0"       # 국내 상장 ETF는 거래세 면제

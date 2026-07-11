@@ -1,0 +1,73 @@
+# Rule Engine 규칙 - IF (when 조건 전부 충족) THEN (then 액션 제안)
+#
+# 규칙 추가/삭제는 이 파일 편집만으로 이루어진다. 코드 수정 불필요.
+#
+# severity:
+#   violation - IPS 위반. 보고서가 non-compliant가 되고 조치가 요구된다.
+#   warning   - 주의 신호. 준수 여부는 바꾸지 않는다.
+#   info      - 정보성.
+#
+# metric 이름은 포트폴리오/리스크 엔진이 계산하는 지표 이름과 일치해야 한다:
+#   equity_weight        주식성 자산(국내주식+미국주식+ETF) 비중 (비율, 0~1)
+#   cash_weight          현금성 자산(현금+예수금+외화) 비중 (비율, 0~1)
+#   max_position_weight  최대 단일 종목 비중 (비율, 0~1)
+#   drawdown             현재 낙폭 (비율, 0~1; 고점 대비 하락폭)
+#   vix                  VIX 지수 레벨
+#
+# then.action은 선언적 명령이다. 해석은 리밸런싱/알림 엔진이 담당한다.
+# 값은 문자열로 표기한다 (float 오차 방지).
+
+rules:
+  - id: max-equity-weight
+    description: 주식성 자산(국내주식+미국주식+ETF) 비중은 70%를 초과할 수 없다
+    severity: violation
+    when:
+      - metric: equity_weight
+        operator: gt
+        value: "0.70"
+    then:
+      action: reduce_equity
+      params:
+        target: "0.70"
+
+  - id: min-cash-weight
+    description: 현금성 자산 비중은 10% 이상이어야 한다
+    severity: violation
+    when:
+      - metric: cash_weight
+        operator: lt
+        value: "0.10"
+    then:
+      action: block_new_buys
+
+  - id: max-single-position
+    description: 단일 종목 비중은 20%를 초과할 수 없다 (분산투자 규칙)
+    severity: violation
+    when:
+      - metric: max_position_weight
+        operator: gt
+        value: "0.20"
+    then:
+      action: diversify_position
+      params:
+        max_weight: "0.20"
+
+  - id: vix-emergency-rebalance
+    description: VIX가 35를 넘으면 긴급 리밸런싱 후보로 검토한다
+    severity: warning
+    when:
+      - metric: vix
+        operator: gt
+        value: "35"
+    then:
+      action: emergency_rebalance_candidate
+
+  - id: max-drawdown-alert
+    description: 포트폴리오 낙폭이 15%를 넘으면 위험 점검이 필요하다
+    severity: warning
+    when:
+      - metric: drawdown
+        operator: gt
+        value: "0.15"
+    then:
+      action: review_risk_exposure

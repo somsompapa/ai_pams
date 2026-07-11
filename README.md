@@ -21,8 +21,12 @@
 | 8 | 보고서 생성 (Markdown/HTML/PDF) | ✅ |
 | 9 | 웹 대시보드 (반응형, Dark/Light) | ✅ |
 | 10 | AI 분석 기능 (Claude 해설, 투자일지) | ✅ |
+| + | 감사 로그(audit), PDF 보고서, 대시보드 일지/AI 해설 화면 | ✅ |
 
 지원 자산: 국내주식 · 미국주식 · ETF · 채권 · 현금 · 예수금 · 외화 · 금 · 연금 · 가상자산(확장 가능)
+
+AI 해설을 사용하려면 `ANTHROPIC_API_KEY`를 설정한다 (`.env.example` 참고).
+PDF 보고서는 한글 TTF 폰트가 필요하다 (예: `apt-get install fonts-nanum`).
 
 ## 시작하기
 

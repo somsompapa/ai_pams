@@ -76,6 +76,18 @@
   .alert .sev { flex: none; }
   .empty { color: var(--muted); font-size: 0.85rem; }
   .wide { grid-column: 1 / -1; }
+  .ai-controls { display: flex; gap: 0.5rem; margin-bottom: 0.7rem; }
+  select, input, textarea, form button {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 0.5rem; padding: 0.45rem 0.6rem; font: inherit; width: 100%;
+  }
+  .ai-controls select { flex: 1; } .ai-controls button { width: auto; }
+  #ai-run, #journal-form button { background: var(--accent); color: #fff; border: none; cursor: pointer; }
+  #ai-output { white-space: pre-wrap; font-size: 0.88rem; line-height: 1.5; }
+  #journal-form { display: grid; gap: 0.5rem; margin-bottom: 0.8rem; }
+  #journal-form textarea { resize: vertical; min-height: 2.6rem; }
+  .journal-entry { border-top: 1px solid var(--line); padding: 0.5rem 0; font-size: 0.85rem; }
+  .journal-entry .head { display: flex; justify-content: space-between; color: var(--muted); }
   footer { text-align: center; color: var(--muted); font-size: 0.75rem; padding: 1rem; }
 </style>
 </head>
@@ -117,6 +129,32 @@
   <section class="card wide">
     <h2>월간 성과 (포트폴리오 vs 벤치마크, %)</h2>
     <table id="perf-table"></table>
+  </section>
+
+  <section class="card">
+    <h2>AI 해설 (참고용 — 계산·판단에 관여하지 않음)</h2>
+    <div class="ai-controls">
+      <select id="ai-kind">
+        <option value="summary">포트폴리오 요약</option>
+        <option value="risk">리스크 설명</option>
+        <option value="market">시장 영향</option>
+        <option value="journal_draft">투자일지 초안</option>
+      </select>
+      <button id="ai-run" type="button">해설 생성</button>
+    </div>
+    <div id="ai-output" class="empty">아직 생성된 해설이 없다.</div>
+  </section>
+
+  <section class="card">
+    <h2>투자일지</h2>
+    <form id="journal-form">
+      <input id="j-title" placeholder="제목" required>
+      <textarea id="j-what" placeholder="무엇을 (예: 삼성전자 30주 매도 @75,000)" required></textarea>
+      <textarea id="j-why" placeholder="왜 (판단 근거)" required></textarea>
+      <input id="j-rule" placeholder="근거 규칙 id (선택, 예: max-single-position)">
+      <button type="submit">기록</button>
+    </form>
+    <div id="journal-list" class="empty">기록이 없다.</div>
   </section>
 </main>
 <footer>본 화면의 모든 수치는 Rule/계산 엔진의 출력이다. 매매 실행 여부는 사용자가 결정한다.</footer>
@@ -212,7 +250,62 @@ async function load() {
 
   el("main").hidden = false;
 }
+
+async function loadJournal() {
+  const response = await fetch("/api/journal");
+  if (!response.ok) return;
+  const { entries } = await response.json();
+  if (entries.length === 0) return;
+  el("journal-list").className = "";
+  el("journal-list").innerHTML = entries.slice().reverse().map((e) => `
+    <div class="journal-entry">
+      <div class="head"><strong>${esc(e.title)}</strong><span>${esc(e.entry_date)}</span></div>
+      <div>무엇을: ${esc(e.what)}</div>
+      <div>왜: ${esc(e.why)}</div>
+      ${e.rule_basis ? `<div class="empty">근거 규칙: ${esc(e.rule_basis)}</div>` : ""}
+    </div>`).join("");
+}
+
+el("journal-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const response = await fetch("/api/journal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: el("j-title").value,
+      what: el("j-what").value,
+      why: el("j-why").value,
+      rule_basis: el("j-rule").value,
+    }),
+  });
+  if (response.ok) {
+    el("journal-form").reset();
+    loadJournal();
+  } else {
+    const body = await response.json().catch(() => ({}));
+    alert("기록 실패: " + (body.detail ?? response.status));
+  }
+});
+
+el("ai-run").addEventListener("click", async () => {
+  el("ai-output").className = "empty";
+  el("ai-output").textContent = "생성 중…";
+  const response = await fetch("/api/analysis", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind: el("ai-kind").value }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (response.ok) {
+    el("ai-output").className = "";
+    el("ai-output").textContent = body.text;
+  } else {
+    el("ai-output").textContent = body.detail ?? ("실패 (" + response.status + ")");
+  }
+});
+
 load();
+loadJournal();
 </script>
 </body>
 </html>

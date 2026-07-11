@@ -29,10 +29,17 @@ make test      # pytest (tests/unit, tests/integration, tests/e2e)
 make lint      # ruff check + format check
 make typecheck # mypy (strict)
 make check     # lint + typecheck + test 전부
+make serve     # 대시보드 실행 (PAMS_MODE=real 이면 실데이터)
+make snapshot  # 일별 총자산 적재 (매일 실행)
+make report    # 투자 보고서 생성 (reports/, MD/HTML/PDF)
+make alert     # 규칙 발동 시 텔레그램 알림
 ```
+
+CI(GitHub Actions, `.github/workflows/ci.yml`)가 push/PR마다 `make check`를 실행한다.
 
 ## 개발 진행 방식
 
-- Phase 1~10 순서로 진행하며(현재 상태는 Task 목록/커밋 이력 참고), 각 Phase 완료 후 테스트/검토를 거쳐 다음 단계 진행 여부를 사용자에게 확인받는다.
-- 각 Phase 안에서도 요구사항 분석 → 설계 → 인터페이스 → 구현 → 테스트 → 리팩토링 순서를 지킨다.
+- Phase 1~10은 완료됐다(엔진 전부 + 실데이터 어댑터 + 인증/PWA/Docker + 보고서·알림 CLI). 후속 작업은 증권사/시세 API 연동(C1), 양도세 정밀화(C3) 등 포트 확장.
+- 각 작업은 요구사항 분석 → 설계 → 인터페이스(포트) → 테스트 → 구현 → 리팩토링 순서를 지킨다(Test First).
 - 금액 계산에는 float를 쓰지 않는다. `Decimal` 기반 값객체(shared_kernel)를 사용한다.
+- 새 데이터 소스는 기존 포트(예: `PriceLookup`, `TransactionRepository`)에 어댑터를 추가하는 방식으로 붙인다 — domain/application은 건드리지 않는다.

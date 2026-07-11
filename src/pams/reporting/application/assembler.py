@@ -42,6 +42,7 @@ class AssembleInvestmentReport:
         risk: RiskReport | None = None,
         proposal: RebalancingProposal | None = None,
         performance: PerformanceReport | None = None,
+        ai_commentary: str | None = None,
     ) -> ReportDocument:
         sections = [
             self._summary(snapshot, compliance, performance),
@@ -55,7 +56,24 @@ class AssembleInvestmentReport:
             sections.append(self._rebalancing(proposal))
         if performance is not None:
             sections.append(self._performance(performance))
+        if ai_commentary is not None:
+            sections.append(self._ai_commentary(ai_commentary))
         return ReportDocument(title=title, as_of=snapshot.as_of, sections=tuple(sections))
+
+    @staticmethod
+    def _ai_commentary(commentary: str) -> Section:
+        return Section(
+            heading="AI 해설",
+            blocks=(
+                Paragraph(text=commentary),
+                Paragraph(
+                    text=(
+                        "위 해설은 AI(Claude)가 작성했다. AI는 계산에 관여하지 않으며, "
+                        "본 보고서의 모든 수치와 판정은 Rule/계산 엔진의 출력이다."
+                    )
+                ),
+            ),
+        )
 
     @staticmethod
     def _summary(

@@ -174,3 +174,20 @@ class TestAssembler:
         rebalancing_section = next(s for s in document.sections if s.heading == "리밸런싱 제안")
         texts = [b.text for b in rebalancing_section.blocks if hasattr(b, "text")]
         assert any("불필요" in t for t in texts)
+
+    def test_ai_commentary_section_with_disclaimer(self) -> None:
+        """AI 해설은 마지막 섹션이며, 'AI는 계산에 관여하지 않는다' 고지를 반드시 포함한다."""
+        document = AssembleInvestmentReport().execute(
+            title="보고서",
+            snapshot=snapshot(),
+            ai_commentary="포트폴리오는 IT 섹터 집중도가 높은 상태다.",
+        )
+        ai_section = document.sections[-1]
+        assert ai_section.heading == "AI 해설"
+        texts = [b.text for b in ai_section.blocks if hasattr(b, "text")]
+        assert any("IT 섹터" in t for t in texts)
+        assert any("계산" in t and "관여하지 않" in t for t in texts)
+
+    def test_without_ai_commentary_no_section(self) -> None:
+        document = AssembleInvestmentReport().execute(title="보고서", snapshot=snapshot())
+        assert all(s.heading != "AI 해설" for s in document.sections)

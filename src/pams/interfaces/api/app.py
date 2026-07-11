@@ -194,6 +194,25 @@ def create_app(
     def dashboard() -> dict[str, Any]:
         return dashboard_service.build(as_of=as_of(), base_currency=Currency.KRW)
 
+    @app.get("/api/audit")
+    def list_audit(limit: int = 50) -> dict[str, Any]:
+        from pams.audit.application import ListAuditEvents
+
+        events = ListAuditEvents(trail=audit_recorder.trail).execute()
+        recent = list(reversed(events))[: max(1, min(limit, 500))]
+        return {
+            "events": [
+                {
+                    "occurred_at": e.occurred_at.isoformat(),
+                    "actor": e.actor,
+                    "action": e.action,
+                    "detail": e.detail,
+                    "reason": e.reason,
+                }
+                for e in recent
+            ]
+        }
+
     @app.get("/api/journal")
     def list_journal() -> dict[str, Any]:
         entries = ListJournalEntries(repository=journal_repository).execute()

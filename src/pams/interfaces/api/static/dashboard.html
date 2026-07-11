@@ -159,6 +159,11 @@
     </form>
     <div id="journal-list" class="empty">기록이 없다.</div>
   </section>
+
+  <section class="card wide">
+    <h2>감사 로그 (최근 활동)</h2>
+    <table id="audit-table"><tbody><tr><td class="empty">기록이 없다.</td></tr></tbody></table>
+  </section>
 </main>
 <footer>본 화면의 모든 수치는 Rule/계산 엔진의 출력이다. 매매 실행 여부는 사용자가 결정한다.</footer>
 
@@ -284,6 +289,7 @@ el("journal-form").addEventListener("submit", async (event) => {
   if (response.ok) {
     el("journal-form").reset();
     loadJournal();
+    loadAudit();
   } else {
     const body = await response.json().catch(() => ({}));
     alert("기록 실패: " + (body.detail ?? response.status));
@@ -307,8 +313,22 @@ el("ai-run").addEventListener("click", async () => {
   }
 });
 
+async function loadAudit() {
+  const response = await fetch("/api/audit?limit=20");
+  if (!response.ok) return;
+  const { events } = await response.json();
+  if (events.length === 0) return;
+  el("audit-table").innerHTML = `
+    <thead><tr><th>시각</th><th>주체</th><th>행동</th><th>내용</th></tr></thead>
+    <tbody>${events.map((e) => `
+      <tr><td>${esc(e.occurred_at.slice(0, 19).replace("T", " "))}</td>
+      <td>${esc(e.actor)}</td><td>${esc(e.action)}</td><td>${esc(e.detail)}</td></tr>`).join("")}
+    </tbody>`;
+}
+
 load();
 loadJournal();
+loadAudit();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
 </script>
 </body>

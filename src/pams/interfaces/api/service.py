@@ -16,7 +16,7 @@ from pams.ips.application import EvaluateCompliance
 from pams.ips.domain import ComplianceReport, EvaluationContext, PolicyStatement
 from pams.ips.infrastructure import YamlPolicyRepository
 from pams.performance.application import ComputePerformanceReport
-from pams.performance.domain import PerformanceHistory
+from pams.performance.domain import PerformanceHistory, PerformanceReport
 from pams.portfolio.application import BuildPortfolioSnapshot
 from pams.portfolio.domain import (
     AssetCatalog,
@@ -26,7 +26,7 @@ from pams.portfolio.domain import (
     TransactionRepository,
 )
 from pams.rebalancing.application import ProposeRebalancing
-from pams.rebalancing.domain import TradeDirection
+from pams.rebalancing.domain import RebalancingProposal, TradeDirection
 from pams.rebalancing.infrastructure import YamlCostModelLoader
 from pams.reporting.application.formatting import (
     asset_class_label,
@@ -37,9 +37,21 @@ from pams.reporting.application.formatting import (
     percent_value,
 )
 from pams.risk.application import ComputeRiskReport
-from pams.risk.domain import ValueSeries
+from pams.risk.domain import RiskReport, ValueSeries
 from pams.risk.infrastructure import YamlRiskParametersLoader
 from pams.shared_kernel.domain import AssetClass, Currency, Money, Percentage
+
+
+@dataclass(frozen=True, slots=True)
+class EngineOutputs:
+    """엔진 유스케이스들의 도메인 출력 묶음 (published language)."""
+
+    policy: PolicyStatement
+    snapshot: PortfolioSnapshot
+    risk: RiskReport
+    compliance: ComplianceReport
+    proposal: RebalancingProposal
+    performance: PerformanceReport
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +67,11 @@ class DashboardService:
     benchmark_values: ValueSeries | None = None  # 없으면 벤치마크 비교 지표 생략
     benchmark_history: PerformanceHistory | None = None
 
-    def build(self, *, as_of: date, base_currency: Currency) -> dict[str, Any]:
+    def compute(self, *, as_of: date, base_currency: Currency) -> EngineOutputs:
+        """모든 엔진 유스케이스를 실행해 도메인 출력 묶음을 만든다.
+
+        대시보드(build)와 보고서 생성(CLI report)이 이 출력을 공유한다.
+        """
         policy = YamlPolicyRepository(
             ips_path=self.config_dir / "ips" / "default.yaml",
             rules_path=self.config_dir / "rules" / "default.yaml",
@@ -99,6 +115,23 @@ class DashboardService:
             benchmark=self.benchmark_history,
             compliance_history=[(as_of, compliance.is_compliant)],
         )
+        return EngineOutputs(
+            policy=policy,
+            snapshot=snapshot,
+            risk=risk,
+            compliance=compliance,
+            proposal=proposal,
+            performance=performance,
+        )
+
+    def build(self, *, as_of: date, base_currency: Currency) -> dict[str, Any]:
+        outputs = self.compute(as_of=as_of, base_currency=base_currency)
+        policy = outputs.policy
+        snapshot = outputs.snapshot
+        risk = outputs.risk
+        compliance = outputs.compliance
+        proposal = outputs.proposal
+        performance = outputs.performance
 
         return {
             "as_of": as_of.isoformat(),

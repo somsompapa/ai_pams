@@ -63,6 +63,10 @@ cp examples/market.yaml data/        # 시장 지표 (vix 등)
 make snapshot
 python -m pams.interfaces.cli snapshot --date 2026-07-08   # 백필 예시
 
+# 보고서 생성 (reports/에 MD·HTML·PDF) / 규칙 알림 (텔레그램)
+make report
+make alert    # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID 필요
+
 # 3. 실데이터 모드로 대시보드 실행 (이력 3일 이상 필요)
 PAMS_MODE=real make serve
 

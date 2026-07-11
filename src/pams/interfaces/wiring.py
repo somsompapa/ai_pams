@@ -8,6 +8,7 @@
 - data/market.yaml               시장 지표 (예: vix) - 규칙이 참조하는 지표
 - data/value_history.jsonl       일별 총자산 이력 - `make snapshot`이 적재
 - data/benchmark.csv (선택)      벤치마크 (bench_date,value) - 있으면 비교 지표 생성
+- config/market/symbols.yaml      시세 자동수집 심볼 매핑 (`make fetch`가 사용)
 
 파일 형식 예시는 examples/ 디렉토리 참고.
 """
@@ -24,7 +25,14 @@ import yaml
 from pams.asset.infrastructure import YamlAssetCatalog
 from pams.interfaces.api.service import DashboardService
 from pams.ips.infrastructure import YamlPolicyRepository
-from pams.market_data.infrastructure import CsvFxLookup, CsvPriceLookup
+from pams.market_data.application import FetchMarketData, FetchResult
+from pams.market_data.domain import QuoteProvider, SymbolMap
+from pams.market_data.infrastructure import (
+    CsvFxLookup,
+    CsvPriceLookup,
+    MarketDataFileWriter,
+    YahooQuoteProvider,
+)
 from pams.performance.domain import PerformanceHistory, ValuationPoint
 from pams.performance.infrastructure import JsonlValueHistoryRepository
 from pams.portfolio.application import BuildPortfolioSnapshot, RecordDailyValuation
@@ -106,6 +114,28 @@ def _benchmark(path: Path) -> tuple[ValueSeries, PerformanceHistory] | None:
         [ValuationPoint(point_date=d, value=v, net_flow=Decimal(0)) for d, v in pairs]
     )
     return series, history
+
+
+def load_symbol_map(project_root: Path) -> SymbolMap:
+    path = project_root / "config" / "market" / "symbols.yaml"
+    if not path.exists():
+        raise RealDataError(f"심볼 매핑 파일이 없다: {path} - 예시: examples/symbols.yaml")
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(document, dict):
+        raise RealDataError(f"{path}: 최상위는 매핑이어야 한다")
+    return SymbolMap.from_dict(document)
+
+
+def fetch_market_data(project_root: Path, provider: QuoteProvider | None = None) -> FetchResult:
+    """외부 시세를 수집해 data/의 prices.csv/fx.csv/market.yaml에 기록한다.
+
+    provider 미지정 시 Yahoo Finance를 사용한다 (테스트는 페이크 주입).
+    """
+    symbols = load_symbol_map(project_root)
+    quote_provider = provider if provider is not None else YahooQuoteProvider()
+    result = FetchMarketData(provider=quote_provider).execute(symbols=symbols)
+    MarketDataFileWriter(data_dir=project_root / "data").write(result)
+    return result
 
 
 def real_dashboard_service(project_root: Path) -> DashboardService:

@@ -1,4 +1,4 @@
-.PHONY: install test lint typecheck check serve snapshot report alert
+.PHONY: install test lint typecheck check serve fetch snapshot report alert
 
 install:
 	pip install -e ".[dev]"
@@ -17,6 +17,9 @@ check: lint typecheck test
 
 serve:
 	python -m pams.interfaces.api
+
+fetch:
+	python -m pams.interfaces.cli fetch
 
 snapshot:
 	python -m pams.interfaces.cli snapshot

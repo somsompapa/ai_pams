@@ -1,0 +1,21 @@
+# 시세 자동수집 심볼 매핑 - `make fetch`가 이 매핑으로 외부 시세를 가져온다.
+#
+# 왼쪽은 우리 식별자, 오른쪽은 공급자(Yahoo Finance) 심볼이다.
+# 여기에 없는 자산은 자동수집에서 제외된다(수동으로 data/prices.csv에 넣어도 됨).
+#
+# Yahoo 심볼 규칙:
+#   국내주식(코스피)  005930.KS      국내주식(코스닥)  247540.KQ
+#   미국주식          AAPL           환율             KRW=X (1 USD = ? KRW)
+#   지수/변동성       ^VIX ^GSPC ^IXIC ^KS11
+
+prices:
+  KRX:005930: 005930.KS      # 삼성전자
+  KRX:069500: 069500.KS      # KODEX 200
+  KRX:114260: 114260.KS      # KOSEF 국고채10년
+  NASDAQ:AAPL: AAPL          # Apple
+
+fx:
+  USD/KRW: KRW=X
+
+indicators:
+  vix: ^VIX

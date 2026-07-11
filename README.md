@@ -59,7 +59,10 @@ cp examples/fx.csv data/             # 환율 (외화 자산이 있을 때)
 cp examples/market.yaml data/        # 시장 지표 (vix 등)
 #    자산 목록은 config/assets/default.yaml 에 등록
 
-# 2. 일별 총자산 적재 (매일 실행 - cron 등록 권장. 과거일 백필도 가능)
+# 2. 시세 자동 수집 (config/market/symbols.yaml의 심볼로 prices/fx/vix 갱신)
+make fetch
+
+# 3. 일별 총자산 적재 (매일 실행 - cron 등록 권장. 과거일 백필도 가능)
 make snapshot
 python -m pams.interfaces.cli snapshot --date 2026-07-08   # 백필 예시
 
@@ -67,7 +70,7 @@ python -m pams.interfaces.cli snapshot --date 2026-07-08   # 백필 예시
 make report
 make alert    # TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID 필요
 
-# 3. 실데이터 모드로 대시보드 실행 (이력 3일 이상 필요)
+# 4. 실데이터 모드로 대시보드 실행 (이력 3일 이상 필요)
 PAMS_MODE=real make serve
 
 # 같은 와이파이의 폰에서 보려면
@@ -88,6 +91,6 @@ docker run -d --name pams --restart unless-stopped -p 8000:8000 \
 - `PAMS_PASSWORD`를 설정하면 모든 화면/API에 로그인이 필요하다.
 - 외부 접속은 서버를 인터넷에 공개하는 대신 **Tailscale**(서버·폰에 설치)을 권장한다.
 - 폰 브라우저에서 접속 후 "홈 화면에 추가"하면 앱처럼 설치된다(PWA).
-- 일별 적재는 서버 crontab에 등록한다: `0 18 * * 1-5 docker exec pams python -m pams.interfaces.cli snapshot`
+- 서버 crontab 예시(평일 18시): `0 18 * * 1-5 docker exec pams sh -c 'python -m pams.interfaces.cli fetch && python -m pams.interfaces.cli snapshot && python -m pams.interfaces.cli alert'`
 
 상세 설계는 [`docs/architecture.md`](docs/architecture.md)를 참고.

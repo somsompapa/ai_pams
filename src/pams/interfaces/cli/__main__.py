@@ -1,6 +1,10 @@
 """PAMS CLI: python -m pams.interfaces.cli <command>
 
 명령:
+  fetch [--root DIR]
+      config/market/symbols.yaml의 심볼로 외부 시세/환율/VIX를 수집해
+      data/의 prices.csv, fx.csv, market.yaml에 기록한다. snapshot 전에 실행한다.
+
   snapshot [--date YYYY-MM-DD] [--root DIR]
       해당 일자(기본: 오늘)의 총자산을 data/value_history.jsonl에 적재한다.
       매일 실행(cron 권장)하면 리스크/성과 시계열이 쌓인다.
@@ -25,6 +29,16 @@ from pathlib import Path
 from pams.interfaces.wiring import real_base_currency, real_valuation_recorder
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
+
+
+def _run_fetch(root: Path, as_of: date) -> int:
+    from pams.interfaces.wiring import fetch_market_data
+
+    result = fetch_market_data(root)
+    print(f"시세 수집 완료: {result.fetched_count}건")
+    for error in result.errors:
+        print(f"  경고: {error}", file=sys.stderr)
+    return 0 if result.fetched_count > 0 else 1
 
 
 def _run_snapshot(root: Path, as_of: date) -> int:
@@ -107,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pams")
     subcommands = parser.add_subparsers(dest="command", required=True)
     for name, description in (
+        ("fetch", "외부 시세/환율/VIX 수집"),
         ("snapshot", "총자산을 가치 이력에 적재"),
         ("report", "투자 보고서 생성 (reports/)"),
         ("alert", "규칙 발동 시 텔레그램 알림"),
@@ -118,7 +133,12 @@ def main(argv: list[str] | None = None) -> int:
 
     root = Path(args.root) if args.root else _PROJECT_ROOT
     as_of = date.fromisoformat(args.as_of) if args.as_of else date.today()
-    runners = {"snapshot": _run_snapshot, "report": _run_report, "alert": _run_alert}
+    runners = {
+        "fetch": _run_fetch,
+        "snapshot": _run_snapshot,
+        "report": _run_report,
+        "alert": _run_alert,
+    }
 
     try:
         return runners[args.command](root, as_of)

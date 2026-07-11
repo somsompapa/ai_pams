@@ -1,0 +1,12 @@
+# 리스크 엔진 파라미터
+#
+# 숫자는 float 오차를 막기 위해 문자열 표기를 권장한다.
+
+# 연환산 기준 기간 수: 일별 데이터 252 (거래일), 월별 데이터 12
+periods_per_year: 252
+
+# 연 무위험수익률 (비율). Sharpe/Sortino/Alpha 계산에 사용.
+risk_free_rate: "0.03"
+
+# 역사적 VaR/CVaR 신뢰수준
+var_confidence: "0.95"

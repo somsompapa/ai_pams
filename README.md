@@ -43,7 +43,7 @@ make check   # lint + typecheck + test
 config/          # IPS/Rule/App 설정 (YAML) — 투자 규칙은 코드가 아닌 여기서 관리
 docs/            # 아키텍처 문서, ADR
 src/pams/        # DDD 바운디드 컨텍스트 × Clean Architecture 3계층
-tests/           # unit / integration / e2e
+tests/           # unit / integration
 data/, reports/  # 로컬 캐시 및 생성된 리포트 (git 비추적)
 ```
 

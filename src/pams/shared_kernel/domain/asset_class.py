@@ -23,5 +23,11 @@ class AssetClass(StrEnum):
         """IPS의 '현금 최소 비중' 규칙이 적용되는 현금성 자산 여부."""
         return self in _CASH_LIKE
 
+    @property
+    def is_equity_like(self) -> bool:
+        """IPS의 '최대 주식비중' 규칙(equity_weight 지표)이 적용되는 주식성 자산 여부."""
+        return self in _EQUITY_LIKE
+
 
 _CASH_LIKE = frozenset({AssetClass.CASH, AssetClass.DEPOSIT, AssetClass.FOREIGN_CURRENCY})
+_EQUITY_LIKE = frozenset({AssetClass.DOMESTIC_STOCK, AssetClass.US_STOCK, AssetClass.ETF})

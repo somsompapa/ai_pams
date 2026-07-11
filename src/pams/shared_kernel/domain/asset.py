@@ -5,7 +5,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from pams.shared_kernel.domain import AssetClass, Currency, DomainValidationError
+from pams.shared_kernel.domain.asset_class import AssetClass
+from pams.shared_kernel.domain.currency import Currency
+from pams.shared_kernel.domain.errors import DomainValidationError
 
 _COUNTRY_CODE = re.compile(r"^[A-Z]{2}$")
 

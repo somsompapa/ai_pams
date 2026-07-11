@@ -31,6 +31,15 @@ class TestAssetClass:
         assert not AssetClass.US_STOCK.is_cash_like
         assert not AssetClass.GOLD.is_cash_like
 
+    def test_equity_like_classification(self) -> None:
+        """IPS의 '최대 주식비중'(equity_weight) 규칙 대상: 국내주식+미국주식+ETF."""
+        assert AssetClass.DOMESTIC_STOCK.is_equity_like
+        assert AssetClass.US_STOCK.is_equity_like
+        assert AssetClass.ETF.is_equity_like
+        assert not AssetClass.BOND.is_equity_like
+        assert not AssetClass.GOLD.is_equity_like
+        assert not AssetClass.CASH.is_equity_like
+
 
 class TestAsset:
     def make_asset(self, **overrides: object) -> Asset:

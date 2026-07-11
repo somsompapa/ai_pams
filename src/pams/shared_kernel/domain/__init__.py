@@ -1,5 +1,6 @@
 """shared_kernel.domain 공개 API."""
 
+from pams.shared_kernel.domain.asset import Asset
 from pams.shared_kernel.domain.asset_class import AssetClass
 from pams.shared_kernel.domain.currency import Currency
 from pams.shared_kernel.domain.errors import (
@@ -12,6 +13,7 @@ from pams.shared_kernel.domain.percentage import Percentage
 from pams.shared_kernel.domain.quantity import Quantity
 
 __all__ = [
+    "Asset",
     "AssetClass",
     "Currency",
     "CurrencyMismatchError",

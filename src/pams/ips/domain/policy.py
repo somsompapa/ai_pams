@@ -1,4 +1,7 @@
-"""PolicyStatement: 투자헌장(IPS) - 시스템의 최상위 규칙 문서."""
+"""PolicyStatement: 투자헌장(IPS) - 시스템의 최상위 규칙 문서.
+
+AllocationTarget은 리밸런싱과 공유하는 어휘라 shared_kernel에 있다.
+"""
 
 from __future__ import annotations
 
@@ -8,43 +11,12 @@ from decimal import Decimal
 
 from pams.ips.domain.rule import Rule
 from pams.shared_kernel.domain import (
+    AllocationTarget,
     AssetClass,
     Currency,
     DomainValidationError,
     Percentage,
 )
-
-_ZERO = Percentage.zero()
-_FULL = Percentage.from_percent(100)
-
-
-@dataclass(frozen=True, slots=True)
-class AllocationTarget:
-    """자산군별 목표비중과 허용밴드(±). 밴드를 벗어나면 리밸런싱 대상이다."""
-
-    asset_class: AssetClass
-    target: Percentage
-    band: Percentage
-
-    def __post_init__(self) -> None:
-        if not (_ZERO <= self.target <= _FULL):
-            raise DomainValidationError(
-                f"{self.asset_class} 목표비중은 0~100% 사이여야 한다: {self.target.as_percent}%"
-            )
-        if self.band < _ZERO:
-            raise DomainValidationError(
-                f"{self.asset_class} 허용밴드는 음수가 될 수 없다: {self.band.as_percent}%"
-            )
-
-    @property
-    def min_weight(self) -> Percentage:
-        low = self.target - self.band
-        return low if low > _ZERO else _ZERO
-
-    @property
-    def max_weight(self) -> Percentage:
-        high = self.target + self.band
-        return high if high < _FULL else _FULL
 
 
 @dataclass(frozen=True, slots=True)

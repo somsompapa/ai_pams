@@ -7,9 +7,10 @@ from pams.ips.domain.evaluation import (
     MissingMetricError,
     RuleEvaluation,
 )
-from pams.ips.domain.policy import AllocationTarget, PolicyStatement
+from pams.ips.domain.policy import PolicyStatement
 from pams.ips.domain.ports import PolicyRepository
 from pams.ips.domain.rule import ComparisonOperator, Condition, Rule, RuleAction, Severity
+from pams.shared_kernel.domain import AllocationTarget
 
 __all__ = [
     "AllocationTarget",

@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PAMS 대시보드</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#10151c">
+<link rel="apple-touch-icon" href="/static/pams-192.png">
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1c2733; --muted: #66707d;
+    --line: #e2e6eb; --accent: #2563eb; --up: #d33; --down: #26a;
+    --ok: #16a34a; --warn: #d97706; --bad: #dc2626; --bar: #e8ecf1;
+  }
+  :root[data-theme="dark"] {
+    --bg: #10151c; --card: #1a212b; --text: #e6ebf1; --muted: #93a0af;
+    --line: #2a3441; --accent: #60a5fa; --bar: #253040;
+    --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #10151c; --card: #1a212b; --text: #e6ebf1; --muted: #93a0af;
+      --line: #2a3441; --accent: #60a5fa; --bar: #253040;
+      --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 1rem 1.5rem; border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 1.1rem; margin: 0; }
+  header .meta { color: var(--muted); font-size: 0.85rem; }
+  #theme-toggle {
+    background: var(--card); color: var(--text); border: 1px solid var(--line);
+    border-radius: 0.5rem; padding: 0.4rem 0.8rem; cursor: pointer;
+  }
+  main {
+    display: grid; gap: 1rem; padding: 1rem 1.5rem 3rem;
+    grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+    max-width: 90rem; margin: 0 auto;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 0.8rem; padding: 1rem 1.2rem;
+  }
+  .card h2 { font-size: 0.95rem; margin: 0 0 0.8rem; color: var(--muted); }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.8rem; }
+  .kpi .label { color: var(--muted); font-size: 0.8rem; }
+  .kpi .value { font-size: 1.25rem; font-weight: 700; margin-top: 0.15rem; }
+  .kpi .sub { font-size: 0.85rem; color: var(--muted); }
+  .pnl-up { color: var(--up); } .pnl-down { color: var(--down); }
+  .badge {
+    display: inline-block; padding: 0.15rem 0.6rem; border-radius: 1rem;
+    font-size: 0.8rem; font-weight: 600;
+  }
+  .badge.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .badge.bad { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+  .bar-row { margin: 0.45rem 0; }
+  .bar-row .bar-head { display: flex; justify-content: space-between; font-size: 0.85rem; }
+  .bar { background: var(--bar); border-radius: 0.3rem; height: 0.55rem; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .target-row { display: grid; grid-template-columns: 5.5rem 1fr auto; gap: 0.6rem; align-items: center; margin: 0.45rem 0; font-size: 0.85rem; }
+  .status-ok { color: var(--ok); } .status-over { color: var(--bad); } .status-under { color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: 0.6rem; }
+  .metric { border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.5rem 0.7rem; }
+  .metric .label { color: var(--muted); font-size: 0.75rem; }
+  .metric .value { font-weight: 700; margin-top: 0.1rem; }
+  .alert { display: flex; gap: 0.6rem; align-items: baseline; padding: 0.45rem 0; border-bottom: 1px solid var(--line); font-size: 0.85rem; }
+  .alert:last-child { border-bottom: none; }
+  .alert .sev { flex: none; }
+  .empty { color: var(--muted); font-size: 0.85rem; }
+  .wide { grid-column: 1 / -1; }
+  .ai-controls { display: flex; gap: 0.5rem; margin-bottom: 0.7rem; }
+  select, input, textarea, form button {
+    background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 0.5rem; padding: 0.45rem 0.6rem; font: inherit; width: 100%;
+  }
+  .ai-controls select { flex: 1; } .ai-controls button { width: auto; }
+  #ai-run, #journal-form button { background: var(--accent); color: #fff; border: none; cursor: pointer; }
+  #ai-output { white-space: pre-wrap; font-size: 0.88rem; line-height: 1.5; }
+  #journal-form { display: grid; gap: 0.5rem; margin-bottom: 0.8rem; }
+  #journal-form textarea { resize: vertical; min-height: 2.6rem; }
+  .journal-entry { border-top: 1px solid var(--line); padding: 0.5rem 0; font-size: 0.85rem; }
+  .journal-entry .head { display: flex; justify-content: space-between; color: var(--muted); }
+  footer { text-align: center; color: var(--muted); font-size: 0.75rem; padding: 1rem; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>PAMS — Personal Asset Management System</h1>
+    <div class="meta" id="meta">불러오는 중…</div>
+  </div>
+  <button id="theme-toggle" type="button">🌓 테마</button>
+</header>
+
+<main id="main" hidden>
+  <section class="card wide">
+    <h2>요약</h2>
+    <div class="kpis">
+      <div class="kpi"><div class="label">총자산</div><div class="value" id="total-value"></div></div>
+      <div class="kpi"><div class="label">오늘 손익</div><div class="value" id="today-pnl"></div><div class="sub" id="today-pnl-pct"></div></div>
+      <div class="kpi"><div class="label">누적수익률 (TWR)</div><div class="value" id="cum-twr"></div><div class="sub" id="bench-cum"></div></div>
+      <div class="kpi"><div class="label">평가손익</div><div class="value" id="unrealized"></div></div>
+      <div class="kpi"><div class="label">실현손익</div><div class="value" id="realized"></div></div>
+      <div class="kpi"><div class="label">IPS 준수</div><div class="value" id="compliance-badge"></div></div>
+    </div>
+  </section>
+
+  <section class="card"><h2>자산군 비중</h2><div id="w-asset"></div></section>
+  <section class="card"><h2>목표비중 대비 (허용밴드 ±)</h2><div id="targets"></div></section>
+  <section class="card"><h2>국가 비중</h2><div id="w-country"></div></section>
+  <section class="card"><h2>통화 비중</h2><div id="w-currency"></div></section>
+
+  <section class="card"><h2>리스크 지표</h2><div class="grid2" id="risk"></div></section>
+  <section class="card"><h2>알림</h2><div id="alerts"></div></section>
+
+  <section class="card wide">
+    <h2>리밸런싱 제안</h2>
+    <div id="rebalancing"></div>
+  </section>
+
+  <section class="card wide">
+    <h2>월간 성과 (포트폴리오 vs 벤치마크, %)</h2>
+    <table id="perf-table"></table>
+  </section>
+
+  <section class="card">
+    <h2>AI 해설 (참고용 — 계산·판단에 관여하지 않음)</h2>
+    <div class="ai-controls">
+      <select id="ai-kind">
+        <option value="summary">포트폴리오 요약</option>
+        <option value="risk">리스크 설명</option>
+        <option value="market">시장 영향</option>
+        <option value="journal_draft">투자일지 초안</option>
+      </select>
+      <button id="ai-run" type="button">해설 생성</button>
+    </div>
+    <div id="ai-output" class="empty">아직 생성된 해설이 없다.</div>
+  </section>
+
+  <section class="card">
+    <h2>투자일지</h2>
+    <form id="journal-form">
+      <input id="j-title" placeholder="제목" required>
+      <textarea id="j-what" placeholder="무엇을 (예: 삼성전자 30주 매도 @75,000)" required></textarea>
+      <textarea id="j-why" placeholder="왜 (판단 근거)" required></textarea>
+      <input id="j-rule" placeholder="근거 규칙 id (선택, 예: max-single-position)">
+      <button type="submit">기록</button>
+    </form>
+    <div id="journal-list" class="empty">기록이 없다.</div>
+  </section>
+
+  <section class="card wide">
+    <h2>감사 로그 (최근 활동)</h2>
+    <table id="audit-table"><tbody><tr><td class="empty">기록이 없다.</td></tr></tbody></table>
+  </section>
+</main>
+<footer>본 화면의 모든 수치는 Rule/계산 엔진의 출력이다. 매매 실행 여부는 사용자가 결정한다.</footer>
+
+<script>
+"use strict";
+
+const root = document.documentElement;
+const stored = localStorage.getItem("pams-theme");
+if (stored) root.dataset.theme = stored;
+document.getElementById("theme-toggle").addEventListener("click", () => {
+  const dark = root.dataset.theme === "dark" ||
+    (!root.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  root.dataset.theme = dark ? "light" : "dark";
+  localStorage.setItem("pams-theme", root.dataset.theme);
+});
+
+const el = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function bars(entries) {
+  return entries.map((e) => `
+    <div class="bar-row">
+      <div class="bar-head"><span>${esc(e.label)}</span><span>${esc(e.percent)}%</span></div>
+      <div class="bar"><i style="width:${Math.min(parseFloat(e.percent), 100)}%"></i></div>
+    </div>`).join("");
+}
+
+async function load() {
+  const response = await fetch("/api/dashboard");
+  if (!response.ok) { el("meta").textContent = "데이터를 불러오지 못했다 (" + response.status + ")"; return; }
+  const d = await response.json();
+
+  el("meta").textContent = `${d.policy_name} · 기준일 ${d.as_of} · 기준통화 ${d.base_currency}`;
+  el("total-value").textContent = d.summary.total_value;
+  const up = d.summary.today_positive;
+  el("today-pnl").textContent = (up ? "+" : "") + d.summary.today_pnl;
+  el("today-pnl").className = "value " + (up ? "pnl-up" : "pnl-down");
+  el("today-pnl-pct").textContent = d.summary.today_pnl_percent;
+  el("cum-twr").textContent = d.summary.cumulative_twr;
+  el("bench-cum").textContent = d.performance.benchmark_cumulative
+    ? "벤치마크 " + d.performance.benchmark_cumulative : "";
+  el("unrealized").textContent = d.summary.unrealized_pnl;
+  el("realized").textContent = d.summary.realized_pnl;
+  el("compliance-badge").innerHTML = d.summary.compliant
+    ? '<span class="badge ok">준수</span>'
+    : `<span class="badge bad">위반 ${d.summary.violation_count}건</span>`;
+
+  el("w-asset").innerHTML = bars(d.weights.asset_class);
+  el("w-country").innerHTML = bars(d.weights.country);
+  el("w-currency").innerHTML = bars(d.weights.currency);
+
+  el("targets").innerHTML = d.targets.map((t) => {
+    const statusLabel = {ok: "밴드 내", over: "초과", under: "미달"}[t.status];
+    return `
+    <div class="target-row">
+      <span>${esc(t.label)}</span>
+      <div class="bar"><i style="width:${Math.min(parseFloat(t.current), 100)}%"></i></div>
+      <span class="status-${t.status}">${esc(t.current)}% / ${esc(t.target)}% ±${esc(t.band)} (${statusLabel})</span>
+    </div>`;
+  }).join("");
+
+  el("risk").innerHTML = d.risk.map((m) => `
+    <div class="metric"><div class="label">${esc(m.label)}</div><div class="value">${esc(m.value)}</div></div>`).join("");
+
+  el("alerts").innerHTML = d.alerts.length === 0
+    ? '<p class="empty">발동한 규칙이 없다.</p>'
+    : d.alerts.map((a) => `
+      <div class="alert">
+        <span class="sev badge ${a.severity === "violation" ? "bad" : "ok"}">${a.severity === "violation" ? "위반" : "주의"}</span>
+        <span><strong>${esc(a.rule_id)}</strong> — ${esc(a.message)} <span class="empty">(${esc(a.observed)})</span></span>
+      </div>`).join("");
+
+  const r = d.rebalancing;
+  el("rebalancing").innerHTML = !r.needed
+    ? '<p class="empty">모든 자산군이 허용밴드 안에 있다. 리밸런싱이 불필요하다.</p>'
+    : `
+    <p>총 매도 <strong>${esc(r.total_sell)}</strong> · 총 매수 <strong>${esc(r.total_buy)}</strong> · 예상 비용 <strong>${esc(r.total_cost)}</strong></p>
+    <table>
+      <thead><tr><th>자산군</th><th>방향</th><th>금액</th><th>현재→목표</th><th>예상비용</th></tr></thead>
+      <tbody>${r.actions.map((a) => `
+        <tr><td>${esc(a.asset_class)}</td><td>${esc(a.direction)}</td><td>${esc(a.amount)}</td>
+        <td>${esc(a.current)}% → ${esc(a.target)}%</td><td>${esc(a.cost)}</td></tr>`).join("")}
+      </tbody>
+    </table>`;
+
+  el("perf-table").innerHTML = `
+    <thead><tr><th>월</th><th>포트폴리오</th><th>벤치마크</th></tr></thead>
+    <tbody>${d.performance.monthly.map((m) => `
+      <tr><td>${esc(m.label)}</td><td>${esc(m.twr)}%</td><td>${m.benchmark === null ? "-" : esc(m.benchmark) + "%"}</td></tr>`).join("")}
+    </tbody>`;
+
+  el("main").hidden = false;
+}
+
+async function loadJournal() {
+  const response = await fetch("/api/journal");
+  if (!response.ok) return;
+  const { entries } = await response.json();
+  if (entries.length === 0) return;
+  el("journal-list").className = "";
+  el("journal-list").innerHTML = entries.slice().reverse().map((e) => `
+    <div class="journal-entry">
+      <div class="head"><strong>${esc(e.title)}</strong><span>${esc(e.entry_date)}</span></div>
+      <div>무엇을: ${esc(e.what)}</div>
+      <div>왜: ${esc(e.why)}</div>
+      ${e.rule_basis ? `<div class="empty">근거 규칙: ${esc(e.rule_basis)}</div>` : ""}
+    </div>`).join("");
+}
+
+el("journal-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const response = await fetch("/api/journal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: el("j-title").value,
+      what: el("j-what").value,
+      why: el("j-why").value,
+      rule_basis: el("j-rule").value,
+    }),
+  });
+  if (response.ok) {
+    el("journal-form").reset();
+    loadJournal();
+    loadAudit();
+  } else {
+    const body = await response.json().catch(() => ({}));
+    alert("기록 실패: " + (body.detail ?? response.status));
+  }
+});
+
+el("ai-run").addEventListener("click", async () => {
+  el("ai-output").className = "empty";
+  el("ai-output").textContent = "생성 중…";
+  const response = await fetch("/api/analysis", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind: el("ai-kind").value }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (response.ok) {
+    el("ai-output").className = "";
+    el("ai-output").textContent = body.text;
+  } else {
+    el("ai-output").textContent = body.detail ?? ("실패 (" + response.status + ")");
+  }
+});
+
+async function loadAudit() {
+  const response = await fetch("/api/audit?limit=20");
+  if (!response.ok) return;
+  const { events } = await response.json();
+  if (events.length === 0) return;
+  el("audit-table").innerHTML = `
+    <thead><tr><th>시각</th><th>주체</th><th>행동</th><th>내용</th></tr></thead>
+    <tbody>${events.map((e) => `
+      <tr><td>${esc(e.occurred_at.slice(0, 19).replace("T", " "))}</td>
+      <td>${esc(e.actor)}</td><td>${esc(e.action)}</td><td>${esc(e.detail)}</td></tr>`).join("")}
+    </tbody>`;
+}
+
+load();
+loadJournal();
+loadAudit();
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
+</script>
+</body>
+</html>

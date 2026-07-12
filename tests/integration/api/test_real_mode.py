@@ -1,0 +1,118 @@
+"""실데이터 모드(wiring + CLI) 통합 테스트.
+
+실제 config/를 복사하고 data/ 파일을 채운 임시 프로젝트로
+'거래 CSV → 스냅샷 적재(CLI 유스케이스) → 대시보드' 전체 흐름을 검증한다.
+"""
+
+import shutil
+from datetime import date
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from pams.interfaces.api.app import create_app
+from pams.interfaces.wiring import (
+    RealDataError,
+    real_base_currency,
+    real_dashboard_service,
+    real_valuation_recorder,
+)
+from pams.shared_kernel.domain import Currency
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+AS_OF = date(2026, 7, 10)
+
+TRANSACTIONS = (
+    "transaction_id,type,trade_date,asset_id,quantity,price,amount,fee,tax,currency,note\n"
+    """t1,deposit,2026-01-02,,,,20000000,0,0,KRW,초기 입금
+t2,buy,2026-01-05,KRX:005930,100,70000,,1050,0,KRW,
+t3,buy,2026-02-03,KRX:114260,20,100000,,600,0,KRW,
+"""
+)
+
+PRICES = """asset_id,price_date,close,currency
+KRX:005930,2026-07-08,74000,KRW
+KRX:005930,2026-07-09,74500,KRW
+KRX:005930,2026-07-10,75000,KRW
+KRX:114260,2026-07-08,101000,KRW
+KRX:114260,2026-07-09,101000,KRW
+KRX:114260,2026-07-10,101000,KRW
+"""
+
+
+@pytest.fixture()
+def project_root(tmp_path: Path) -> Path:
+    shutil.copytree(REPO_ROOT / "config", tmp_path / "config")
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "transactions.csv").write_text(TRANSACTIONS, encoding="utf-8")
+    (data / "prices.csv").write_text(PRICES, encoding="utf-8")
+    (data / "fx.csv").write_text("base,quote,rate_date,rate\n", encoding="utf-8")
+    (data / "market.yaml").write_text('vix: "24.5"\n', encoding="utf-8")
+    return tmp_path
+
+
+class TestSnapshotBackfill:
+    def test_backfill_three_days_then_dashboard(self, project_root: Path) -> None:
+        base = real_base_currency(project_root)
+        assert base is Currency.KRW
+
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            point = recorder.execute(as_of=day, base_currency=base)
+            assert point.value > 0
+
+        service = real_dashboard_service(project_root)
+        client = TestClient(create_app(service, as_of_provider=lambda: AS_OF))
+        data = client.get("/api/dashboard").json()
+        # 총자산 = 삼성 100×75,000 + 국고채 20×101,000 + 예수금
+        #        = 7,500,000 + 2,020,000 + (20,000,000-7,001,050-2,000,600)
+        assert data["summary"]["total_value"] == "20,518,350 KRW"
+        assert data["base_currency"] == "KRW"
+        # 벤치마크 파일이 없으므로 비교 지표는 없다
+        assert data["performance"]["benchmark_cumulative"] is None
+
+    def test_insufficient_history_gives_actionable_error(self, project_root: Path) -> None:
+        with pytest.raises(RealDataError, match="snapshot"):
+            real_dashboard_service(project_root)
+
+    def test_missing_market_metrics_gives_actionable_error(self, project_root: Path) -> None:
+        (project_root / "data" / "market.yaml").unlink()
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            recorder.execute(as_of=day, base_currency=Currency.KRW)
+        with pytest.raises(RealDataError, match="market.yaml"):
+            real_dashboard_service(project_root)
+
+    def test_benchmark_file_enables_comparison(self, project_root: Path) -> None:
+        (project_root / "data" / "benchmark.csv").write_text(
+            "bench_date,value\n2026-07-08,2650\n2026-07-09,2660\n2026-07-10,2670\n",
+            encoding="utf-8",
+        )
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            recorder.execute(as_of=day, base_currency=Currency.KRW)
+        service = real_dashboard_service(project_root)
+        data = service.build(as_of=AS_OF, base_currency=Currency.KRW)
+        assert data["performance"]["benchmark_cumulative"] is not None
+
+
+class TestCli:
+    def test_snapshot_command(self, project_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        from pams.interfaces.cli.__main__ import main
+
+        exit_code = main(["snapshot", "--date", "2026-07-10", "--root", str(project_root)])
+        assert exit_code == 0
+        assert "적재 완료" in capsys.readouterr().out
+        assert (project_root / "data" / "value_history.jsonl").exists()
+
+    def test_snapshot_failure_returns_nonzero(
+        self, project_root: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from pams.interfaces.cli.__main__ import main
+
+        (project_root / "data" / "transactions.csv").unlink()
+        exit_code = main(["snapshot", "--date", "2026-07-10", "--root", str(project_root)])
+        assert exit_code == 1
+        assert "실패" in capsys.readouterr().err

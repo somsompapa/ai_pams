@@ -1,0 +1,34 @@
+# 자산 마스터 데이터 - 보유하거나 매매할 자산을 여기에 등록한다.
+#
+# asset_id는 "<시장|유형>:<심볼>" 관례를 따른다.
+# asset_class: domestic_stock/us_stock/etf/bond/cash/deposit/foreign_currency/gold/pension/crypto
+# sector는 선택 (현금/금 등은 생략)
+
+assets:
+  - asset_id: KRX:005930
+    name: 삼성전자
+    asset_class: domestic_stock
+    currency: KRW
+    country: KR
+    sector: Information Technology
+  - asset_id: NASDAQ:AAPL
+    name: Apple Inc.
+    asset_class: us_stock
+    currency: USD
+    country: US
+    sector: Information Technology
+  - asset_id: KRX:069500
+    name: KODEX 200
+    asset_class: etf
+    currency: KRW
+    country: KR
+  - asset_id: KRX:114260
+    name: KOSEF 국고채10년
+    asset_class: bond
+    currency: KRW
+    country: KR
+  - asset_id: KRX:GOLD
+    name: KRX 금현물 (1g)
+    asset_class: gold
+    currency: KRW
+    country: KR

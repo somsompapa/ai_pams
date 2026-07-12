@@ -1,0 +1,33 @@
+# 거래비용 모델 - 자산군별 수수료율/매도세율 (비율 표기, 문자열 권장)
+#
+# fee_rate: 매매수수료율 (매수/매도 공통)
+# sell_tax_rate: 매도 시에만 부과되는 세율
+
+# 정의되지 않은 자산군에 적용되는 기본 요율
+default:
+  fee_rate: "0.001"
+  sell_tax_rate: "0"
+
+costs:
+  - asset_class: domestic_stock
+    fee_rate: "0.00015"      # 국내주식 위탁수수료 (예시)
+    sell_tax_rate: "0.0018"  # 증권거래세 (코스피 기준 예시)
+  - asset_class: us_stock
+    fee_rate: "0.0025"       # 해외주식 수수료 (예시)
+    sell_tax_rate: "0"       # SEC fee는 미미하여 0으로 근사
+    capital_gains:           # 해외주식 양도소득세: (차익 - 연 250만) × 22%
+      rate: "0.22"
+      annual_exemption: "2500000"
+      currency: KRW
+  - asset_class: etf
+    fee_rate: "0.00015"
+    sell_tax_rate: "0"       # 국내 상장 ETF는 거래세 면제
+  - asset_class: bond
+    fee_rate: "0.0003"
+    sell_tax_rate: "0"
+  - asset_class: gold
+    fee_rate: "0.003"
+    sell_tax_rate: "0"
+  - asset_class: crypto
+    fee_rate: "0.0005"
+    sell_tax_rate: "0"

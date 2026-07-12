@@ -1,0 +1,13 @@
+{
+  "name": "PAMS",
+  "short_name": "PAMS",
+  "description": "Personal Asset Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#10151c",
+  "theme_color": "#10151c",
+  "icons": [
+    { "src": "/static/pams-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/static/pams-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

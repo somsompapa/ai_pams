@@ -1,0 +1,31 @@
+# 투자헌장(IPS) - 시스템의 최상위 규칙 문서
+#
+# 숫자는 이진 부동소수점 오차를 막기 위해 문자열("20")로 표기하는 것을 권장한다.
+# target_percent 합계는 반드시 100이어야 하며, 로드 시점에 검증된다.
+# band_percent: 목표비중 대비 허용 편차(±). 벗어나면 리밸런싱 대상.
+
+name: 기본 투자헌장
+base_currency: KRW
+
+allocation_targets:
+  - asset_class: domestic_stock
+    target_percent: "15"
+    band_percent: "5"
+  - asset_class: us_stock
+    target_percent: "25"
+    band_percent: "5"
+  - asset_class: etf
+    target_percent: "10"
+    band_percent: "5"
+  - asset_class: bond
+    target_percent: "20"
+    band_percent: "5"
+  - asset_class: gold
+    target_percent: "5"
+    band_percent: "3"
+  - asset_class: pension
+    target_percent: "10"
+    band_percent: "3"
+  - asset_class: cash
+    target_percent: "15"
+    band_percent: "5"

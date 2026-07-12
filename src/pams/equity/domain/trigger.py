@@ -1,8 +1,11 @@
-"""종목별 절대가격 매수/매도 트리거 도메인.
+"""종목별 절대가격 매수/익절/손절 트리거 도메인.
 
-"삼성전자 7만원 이하면 매수, 9만원 이상이면 매도" 같은, 사용자가 직접 정한
-가격선. 현재가가 선을 건드리면 매수/매도 신호를 낸다. 판단은 이 규칙이 하고
-실제 매매는 사용자가 한다(제안까지만).
+한 종목에 세 가지 가격선을 둘 수 있다(모두 선택, 최소 하나 필수):
+- 매수선(buy_at):        이하로 내려가면 매수
+- 익절선(take_profit_at): 이상으로 올라가면 매도(이익 실현)
+- 손절선(stop_loss_at):   이하로 내려가면 매도(손실 제한)
+
+판단은 이 규칙이 하고 실제 매매는 사용자가 한다(제안까지만).
 """
 
 from __future__ import annotations
@@ -16,46 +19,77 @@ from pams.shared_kernel.domain import DomainValidationError, Money
 
 
 @dataclass(frozen=True, slots=True)
-class PriceTrigger:
-    """종목 하나의 매수/매도 가격선. 자산의 거래통화 기준. 둘 중 하나는 필수."""
+class TriggerHit:
+    """현재가가 어떤 선을 건드려 발생한 신호. label: 매수/익절/손절."""
 
+    signal: StockSignal
+    label: str
+    bound: Money
+
+
+@dataclass(frozen=True, slots=True)
+class PriceTrigger:
     asset_id: str
-    buy_at: Money | None
-    sell_at: Money | None
+    buy_at: Money | None = None
+    take_profit_at: Money | None = None
+    stop_loss_at: Money | None = None
 
     def __post_init__(self) -> None:
         if not self.asset_id.strip():
             raise DomainValidationError("asset_id는 비어 있을 수 없다")
-        if self.buy_at is None and self.sell_at is None:
+        lines = [self.buy_at, self.take_profit_at, self.stop_loss_at]
+        if all(line is None for line in lines):
             raise DomainValidationError(
-                f"{self.asset_id}: buy_at/sell_at 중 최소 하나는 있어야 한다"
+                f"{self.asset_id}: 매수선/익절선/손절선 중 최소 하나는 있어야 한다"
             )
-        if self.buy_at is not None and not self.buy_at.is_positive:
-            raise DomainValidationError(f"{self.asset_id}: 매수가는 양수여야 한다")
-        if self.sell_at is not None and not self.sell_at.is_positive:
-            raise DomainValidationError(f"{self.asset_id}: 매도가는 양수여야 한다")
-        if self.buy_at is not None and self.sell_at is not None:
-            if self.buy_at.currency is not self.sell_at.currency:
-                raise DomainValidationError(f"{self.asset_id}: 매수/매도가 통화가 다르다")
-            if self.buy_at.amount >= self.sell_at.amount:
-                raise DomainValidationError(f"{self.asset_id}: 매수가는 매도가보다 낮아야 한다")
+        currencies = {line.currency for line in lines if line is not None}
+        if len(currencies) > 1:
+            raise DomainValidationError(f"{self.asset_id}: 가격선들의 통화가 서로 다르다")
+        for label, line in (
+            ("매수선", self.buy_at),
+            ("익절선", self.take_profit_at),
+            ("손절선", self.stop_loss_at),
+        ):
+            if line is not None and not line.is_positive:
+                raise DomainValidationError(f"{self.asset_id}: {label}은 양수여야 한다")
+
+        # 논리적 순서: 손절선 < 매수선 < 익절선
+        if self.stop_loss_at is not None and self.take_profit_at is not None:
+            if self.stop_loss_at.amount >= self.take_profit_at.amount:
+                raise DomainValidationError(f"{self.asset_id}: 손절선은 익절선보다 낮아야 한다")
+        if self.buy_at is not None and self.take_profit_at is not None:
+            if self.buy_at.amount >= self.take_profit_at.amount:
+                raise DomainValidationError(f"{self.asset_id}: 매수선은 익절선보다 낮아야 한다")
+        if self.stop_loss_at is not None and self.buy_at is not None:
+            if self.stop_loss_at.amount >= self.buy_at.amount:
+                raise DomainValidationError(f"{self.asset_id}: 손절선은 매수선보다 낮아야 한다")
 
     @property
     def currency(self) -> object:
-        bound = self.buy_at if self.buy_at is not None else self.sell_at
-        assert bound is not None
-        return bound.currency
+        for line in (self.buy_at, self.take_profit_at, self.stop_loss_at):
+            if line is not None:
+                return line.currency
+        raise AssertionError("가격선이 하나도 없다")  # __post_init__에서 차단됨
+
+    def evaluate(self, current_price: Money) -> TriggerHit | None:
+        """현재가로 신호를 계산한다. 유지(HOLD)면 None.
+
+        우선순위: 손절 → 익절 → 매수 (자본 보호가 최우선).
+        """
+        for line in (self.stop_loss_at, self.take_profit_at, self.buy_at):
+            if line is not None and current_price.currency is not line.currency:
+                raise DomainValidationError(f"{self.asset_id}: 현재가 통화가 트리거와 다르다")
+        if self.stop_loss_at is not None and current_price.amount <= self.stop_loss_at.amount:
+            return TriggerHit(StockSignal.SELL, "손절", self.stop_loss_at)
+        if self.take_profit_at is not None and current_price.amount >= self.take_profit_at.amount:
+            return TriggerHit(StockSignal.SELL, "익절", self.take_profit_at)
+        if self.buy_at is not None and current_price.amount <= self.buy_at.amount:
+            return TriggerHit(StockSignal.BUY, "매수", self.buy_at)
+        return None
 
     def signal(self, current_price: Money) -> StockSignal:
-        if self.buy_at is not None and current_price.currency is not self.buy_at.currency:
-            raise DomainValidationError(f"{self.asset_id}: 현재가 통화가 트리거와 다르다")
-        if self.sell_at is not None and current_price.currency is not self.sell_at.currency:
-            raise DomainValidationError(f"{self.asset_id}: 현재가 통화가 트리거와 다르다")
-        if self.buy_at is not None and current_price.amount <= self.buy_at.amount:
-            return StockSignal.BUY
-        if self.sell_at is not None and current_price.amount >= self.sell_at.amount:
-            return StockSignal.SELL
-        return StockSignal.HOLD
+        hit = self.evaluate(current_price)
+        return hit.signal if hit is not None else StockSignal.HOLD
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +118,7 @@ class PriceTriggerRow:
     current_price: Money
     trigger: PriceTrigger
     signal: StockSignal
+    label: str  # 매수/익절/손절/유지
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +127,6 @@ class PriceTriggerReport:
 
     @property
     def firing(self) -> tuple[PriceTriggerRow, ...]:
-        """실제로 매수/매도 신호가 켜진 행만."""
         return tuple(r for r in self.rows if r.signal is not StockSignal.HOLD)
 
 
@@ -106,12 +140,14 @@ class EvaluatePriceTriggers:
             price = current_prices.get(trigger.asset_id)
             if price is None:
                 continue
+            hit = trigger.evaluate(price)
             rows.append(
                 PriceTriggerRow(
                     asset_id=trigger.asset_id,
                     current_price=price,
                     trigger=trigger,
-                    signal=trigger.signal(price),
+                    signal=hit.signal if hit is not None else StockSignal.HOLD,
+                    label=hit.label if hit is not None else "유지",
                 )
             )
         return PriceTriggerReport(rows=tuple(rows))

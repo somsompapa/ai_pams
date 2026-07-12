@@ -206,7 +206,7 @@
     <div class="holdings-scroll"><table id="stocks-table"></table></div>
     <p id="stocks-note" class="empty"></p>
     <details class="sub-form">
-      <summary>＋ 매수/매도 가격선(트리거) 설정</summary>
+      <summary>＋ 매수/익절/손절 가격선(트리거) 설정</summary>
       <form id="trigger-form" class="tx-form">
         <input id="tg-asset" list="asset-options" placeholder="종목 (예: KRX:005930)" required>
         <select id="tg-currency">
@@ -215,10 +215,11 @@
           <option value="JPY">JPY</option>
         </select>
         <input id="tg-buy" placeholder="매수선(이하 매수)" inputmode="decimal">
-        <input id="tg-sell" placeholder="매도선(이상 매도)" inputmode="decimal">
+        <input id="tg-tp" placeholder="익절선(이상 매도)" inputmode="decimal">
+        <input id="tg-sl" placeholder="손절선(이하 매도)" inputmode="decimal">
         <button type="submit">트리거 저장</button>
       </form>
-      <p id="tg-msg" class="empty">현재가가 매수선 이하로 내려가면 매수, 매도선 이상이면 매도 신호가 '오늘의 액션'에 뜬다.</p>
+      <p id="tg-msg" class="empty">매수선↓ 매수 · 익절선↑ 매도 · 손절선↓ 매도. 현재가가 선을 건드리면 '오늘의 액션'에 신호가 뜬다. (순서: 손절 &lt; 매수 &lt; 익절)</p>
     </details>
     <details class="sub-form">
       <summary>＋ 새 종목 추가</summary>
@@ -384,7 +385,7 @@ async function load() {
   el("stocks-table").innerHTML = stocks.length
     ? `<thead><tr>
          <th>종목</th><th class="num">수량</th><th class="num">평단가</th><th class="num">현재가</th>
-         <th class="num">평가손익</th><th class="num">매수선↓</th><th class="num">매도선↑</th><th>신호</th><th class="num">비중</th>
+         <th class="num">평가손익</th><th class="num">매수선↓</th><th class="num">익절선↑</th><th class="num">손절선↓</th><th>신호</th><th class="num">비중</th>
        </tr></thead>
        <tbody>${stocks.map((s) => `
          <tr>
@@ -394,8 +395,9 @@ async function load() {
            <td class="num">${esc(s.current_price)}</td>
            <td class="num ${s.unrealized_positive ? "pnl-up" : "pnl-down"}">${esc(s.unrealized_pnl)} (${esc(s.unrealized_percent)})</td>
            <td class="num">${esc(s.buy_trigger)}</td>
-           <td class="num">${esc(s.sell_trigger)}</td>
-           <td>${sigBadge[s.signal] || esc(s.signal_label)}</td>
+           <td class="num">${esc(s.take_profit)}</td>
+           <td class="num">${esc(s.stop_loss)}</td>
+           <td><span class="badge ${{buy:"buy",sell:"sell",hold:"hold",none:"hold"}[s.signal] || "hold"}">${esc(s.signal_label)}</span></td>
            <td class="num">${esc(s.weight)}%</td>
          </tr>`).join("")}</tbody>`
     : '<tbody><tr><td class="empty">보유 주식 종목이 없다.</td></tr></tbody>';
@@ -531,7 +533,8 @@ el("trigger-form").addEventListener("submit", async (event) => {
     asset_id: el("tg-asset").value,
     currency: el("tg-currency").value,
     buy_at: el("tg-buy").value || null,
-    sell_at: el("tg-sell").value || null,
+    take_profit_at: el("tg-tp").value || null,
+    stop_loss_at: el("tg-sl").value || null,
   }, "tg-msg");
   if (ok) el("trigger-form").reset();
 });

@@ -35,8 +35,10 @@ def save_price_trigger(path: Path, trigger: PriceTrigger) -> None:
     entry: dict[str, str] = {"asset_id": trigger.asset_id, "currency": str(trigger.currency)}
     if trigger.buy_at is not None:
         entry["buy_at"] = str(trigger.buy_at.amount)
-    if trigger.sell_at is not None:
-        entry["sell_at"] = str(trigger.sell_at.amount)
+    if trigger.take_profit_at is not None:
+        entry["take_profit_at"] = str(trigger.take_profit_at.amount)
+    if trigger.stop_loss_at is not None:
+        entry["stop_loss_at"] = str(trigger.stop_loss_at.amount)
     entries.append(entry)
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,10 +89,17 @@ class YamlPriceTriggerLoader:
         except ValueError:
             raise PriceTriggerConfigError(f"{where}: 알 수 없는 통화 {currency_raw!r}") from None
 
-        buy_at = (
-            Money.of(str(entry["buy_at"]), currency) if entry.get("buy_at") is not None else None
+        def money(field: str) -> Money | None:
+            value = entry.get(field)
+            return Money.of(str(value), currency) if value is not None else None
+
+        # sell_at은 구버전 별칭 → 익절선(take_profit_at)
+        take_profit = money("take_profit_at")
+        if take_profit is None:
+            take_profit = money("sell_at")
+        return PriceTrigger(
+            asset_id=asset_id,
+            buy_at=money("buy_at"),
+            take_profit_at=take_profit,
+            stop_loss_at=money("stop_loss_at"),
         )
-        sell_at = (
-            Money.of(str(entry["sell_at"]), currency) if entry.get("sell_at") is not None else None
-        )
-        return PriceTrigger(asset_id=asset_id, buy_at=buy_at, sell_at=sell_at)

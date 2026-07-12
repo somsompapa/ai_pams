@@ -218,7 +218,8 @@ class TestAssetAndTriggerEntry:
                 "asset_id": "KRX:005930",
                 "currency": "KRW",
                 "buy_at": "70000",
-                "sell_at": "90000",
+                "take_profit_at": "90000",
+                "stop_loss_at": "60000",
             },
         )
         assert resp.status_code == 201
@@ -226,20 +227,21 @@ class TestAssetAndTriggerEntry:
         data = service.build(as_of=AS_OF, base_currency=Currency.KRW)
         samsung = next(s for s in data["stocks"] if s["asset_id"] == "KRX:005930")
         assert samsung["buy_trigger"] == "70,000 KRW"
-        assert samsung["sell_trigger"] == "90,000 KRW"
+        assert samsung["take_profit"] == "90,000 KRW"
+        assert samsung["stop_loss"] == "60,000 KRW"
 
     def test_invalid_trigger_rejected(
         self, project_root: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         client = self._client(project_root, monkeypatch)
-        # 매수가 > 매도가 → 400
+        # 매수선이 익절선보다 높으면 → 400
         resp = client.post(
             "/api/triggers",
             json={
                 "asset_id": "KRX:005930",
                 "currency": "KRW",
                 "buy_at": "90000",
-                "sell_at": "70000",
+                "take_profit_at": "70000",
             },
         )
         assert resp.status_code == 400

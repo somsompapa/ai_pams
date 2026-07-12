@@ -96,12 +96,13 @@ class AssetRequest(BaseModel):
 
 
 class TriggerRequest(BaseModel):
-    """종목별 매수/매도 가격선. 숫자는 문자열로 받는다."""
+    """종목별 매수선/익절선/손절선. 숫자는 문자열로 받는다."""
 
     asset_id: str
     currency: str
     buy_at: str | None = None
-    sell_at: str | None = None
+    take_profit_at: str | None = None
+    stop_loss_at: str | None = None
 
 
 def _is_real_mode() -> bool:
@@ -423,7 +424,8 @@ def create_app(
         trigger = PriceTrigger(
             asset_id=request.asset_id.strip(),
             buy_at=money(request.buy_at),
-            sell_at=money(request.sell_at),
+            take_profit_at=money(request.take_profit_at),
+            stop_loss_at=money(request.stop_loss_at),
         )
         save_price_trigger(dashboard_service.config_dir / "triggers" / "default.yaml", trigger)
         record_audit(

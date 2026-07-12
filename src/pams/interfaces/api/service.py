@@ -210,9 +210,10 @@ class DashboardService:
             if plan is not None:
                 prices = {v.asset.asset_id: v.price for v in snapshot.valuations}
                 for row in EvaluatePriceTriggers(plan).execute(current_prices=prices).firing:
+                    hit = row.trigger.evaluate(row.current_price)
+                    assert hit is not None  # firing이므로 hit이 있다
                     is_buy = row.signal is StockSignal.BUY
-                    bound = row.trigger.buy_at if is_buy else row.trigger.sell_at
-                    assert bound is not None
+                    op = "≤" if hit.label in ("매수", "손절") else "≥"
                     actions.append(
                         {
                             "source": "price_trigger",
@@ -220,10 +221,10 @@ class DashboardService:
                             "asset_id": row.asset_id,
                             "asset": names.get(row.asset_id, row.asset_id),
                             "direction": "buy" if is_buy else "sell",
-                            "direction_label": "매수" if is_buy else "매도",
+                            "direction_label": hit.label,  # 매수/익절/손절
                             "reason": (
                                 f"현재가 {format_money(row.current_price)} "
-                                f"{'≤ 매수선' if is_buy else '≥ 매도선'} {format_money(bound)}"
+                                f"{op} {hit.label}선 {format_money(hit.bound)}"
                             ),
                             "guide": "",
                         }
@@ -383,7 +384,6 @@ class DashboardService:
                 plan = None
 
         total = snapshot.total_value.amount
-        signal_label = {"buy": "매수", "sell": "매도", "hold": "유지"}
         rows: list[dict[str, Any]] = []
         for v in equities:
             quantity = v.position.quantity.value
@@ -393,14 +393,21 @@ class DashboardService:
                 v.unrealized_pnl_local.amount / cost.amount if cost.amount != 0 else Decimal(0)
             )
             trigger = plan.trigger_for(v.asset.asset_id) if plan is not None else None
+
+            def line(value: Money | None) -> str:
+                return format_money(value) if value is not None else "-"
+
             if trigger is not None:
-                signal = trigger.signal(v.price).value
-                buy_at = format_money(trigger.buy_at) if trigger.buy_at is not None else "-"
-                sell_at = format_money(trigger.sell_at) if trigger.sell_at is not None else "-"
+                hit = trigger.evaluate(v.price)
+                signal = hit.signal.value if hit is not None else "hold"
+                label = hit.label if hit is not None else "유지"
+                buy_at = line(trigger.buy_at)
+                take_profit = line(trigger.take_profit_at)
+                stop_loss = line(trigger.stop_loss_at)
             else:
                 signal = "none"
-                buy_at = "-"
-                sell_at = "-"
+                label = "미설정"
+                buy_at = take_profit = stop_loss = "-"
             rows.append(
                 {
                     "asset_id": v.asset.asset_id,
@@ -417,9 +424,10 @@ class DashboardService:
                         v.market_value_base.amount / total if total > 0 else Decimal(0)
                     ),
                     "buy_trigger": buy_at,
-                    "sell_trigger": sell_at,
+                    "take_profit": take_profit,
+                    "stop_loss": stop_loss,
                     "signal": signal,
-                    "signal_label": signal_label.get(signal, "미설정"),
+                    "signal_label": label,
                 }
             )
         rows.sort(key=lambda r: r["name"])

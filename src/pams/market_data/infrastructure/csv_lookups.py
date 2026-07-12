@@ -25,6 +25,13 @@ class CsvDataError(Exception):
     """CSV 시장 데이터 파일을 읽는 데 실패했다."""
 
 
+def _mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
 def _read_rows(path: Path) -> list[tuple[int, dict[str, str | None]]]:
     try:
         text = path.read_text(encoding="utf-8-sig")
@@ -51,6 +58,7 @@ class CsvPriceLookup:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._prices: dict[str, list[tuple[date, Money]]] | None = None
+        self._loaded_mtime: float | None = None
 
     def price_of(self, asset_id: str, as_of: date) -> Money | None:
         history = self._load().get(asset_id, [])
@@ -60,8 +68,11 @@ class CsvPriceLookup:
         return None
 
     def _load(self) -> dict[str, list[tuple[date, Money]]]:
-        if self._prices is not None:
+        # 파일이 갱신되면(매일 fetch 등) 자동으로 다시 읽는다.
+        mtime = _mtime(self._path)
+        if self._prices is not None and mtime == self._loaded_mtime:
             return self._prices
+        self._loaded_mtime = mtime
         prices: dict[str, list[tuple[date, Money]]] = {}
         for row_number, row in _read_rows(self._path):
             where = f"{self._path} {row_number}행"
@@ -87,6 +98,7 @@ class CsvFxLookup:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._rates: dict[tuple[Currency, Currency], list[tuple[date, Decimal]]] | None = None
+        self._loaded_mtime: float | None = None
 
     def rate_to(self, currency: Currency, base: Currency, as_of: date) -> Decimal | None:
         history = self._load().get((currency, base), [])
@@ -96,8 +108,10 @@ class CsvFxLookup:
         return None
 
     def _load(self) -> dict[tuple[Currency, Currency], list[tuple[date, Decimal]]]:
-        if self._rates is not None:
+        mtime = _mtime(self._path)
+        if self._rates is not None and mtime == self._loaded_mtime:
             return self._rates
+        self._loaded_mtime = mtime
         rates: dict[tuple[Currency, Currency], list[tuple[date, Decimal]]] = {}
         for row_number, row in _read_rows(self._path):
             where = f"{self._path} {row_number}행"

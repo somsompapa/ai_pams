@@ -108,6 +108,13 @@ class PortfolioSnapshot:
         )
         return {AssetClass(key): weight for key, weight in self._weights(raw).items()}
 
+    def values_by_asset_class(self) -> dict[AssetClass, Money]:
+        """자산군별 평가금액(기준통화). 예수금은 DEPOSIT으로 분류된다."""
+        raw = self._grouped_values(
+            lambda v: v.asset.asset_class.value, lambda _c: AssetClass.DEPOSIT.value
+        )
+        return {AssetClass(key): Money(amount, self.base_currency) for key, amount in raw.items()}
+
     def weights_by_country(self) -> dict[str, Percentage]:
         """예수금은 통화 발행국이 아닌 '무국적(CASH)'으로 분류한다."""
         return self._weights(self._grouped_values(lambda v: v.asset.country, lambda _c: "CASH"))

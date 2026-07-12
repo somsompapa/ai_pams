@@ -37,6 +37,7 @@ class TestDashboardApi:
             "policy_name",
             "summary",
             "weights",
+            "holdings",
             "targets",
             "risk",
             "alerts",
@@ -45,6 +46,32 @@ class TestDashboardApi:
         }
         assert data["base_currency"] == "KRW"
         assert data["summary"]["total_value"].endswith("KRW")
+
+    def test_asset_class_weights_include_amount(self, client: TestClient) -> None:
+        data = client.get("/api/dashboard").json()
+        for entry in data["weights"]["asset_class"]:
+            assert entry["value"].endswith("KRW")
+            assert "percent" in entry
+
+    def test_holdings_expose_per_position_detail(self, client: TestClient) -> None:
+        data = client.get("/api/dashboard").json()
+        holdings = data["holdings"]
+        assert holdings
+        sample = holdings[0]
+        assert set(sample) >= {
+            "asset_id",
+            "name",
+            "asset_class",
+            "quantity",
+            "avg_price",
+            "current_price",
+            "market_value",
+            "unrealized_pnl",
+            "unrealized_percent",
+            "weight",
+        }
+        # 데모 보유 종목(삼성전자)이 종목 목록에 있어야 한다
+        assert any(h["asset_id"] == "KRX:005930" for h in holdings)
 
     def test_weights_sum_to_100(self, client: TestClient) -> None:
         data = client.get("/api/dashboard").json()

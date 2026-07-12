@@ -32,6 +32,7 @@ from pams.reporting.application.formatting import (
     asset_class_label,
     format_metric,
     format_money,
+    format_number,
     format_percent,
     metric_label,
     percent_value,
@@ -140,6 +141,7 @@ class DashboardService:
             "policy_name": policy.name,
             "summary": self._summary(snapshot, performance.cumulative_twr, compliance),
             "weights": self._weights(snapshot),
+            "holdings": self._holdings(snapshot),
             "targets": self._targets(snapshot, policy),
             "risk": [
                 {"name": name, "label": metric_label(name), "value": format_metric(name, value)}
@@ -198,13 +200,59 @@ class DashboardService:
                 for key, weight in ordered
             ]
 
+        values = snapshot.values_by_asset_class()
+        weights = snapshot.weights_by_asset_class()
+        asset_class = [
+            {
+                "label": asset_class_label(ac.value),
+                "percent": percent_value(weight),
+                "value": format_money(values[ac]),
+            }
+            for ac, weight in sorted(weights.items(), key=lambda item: item[1].ratio, reverse=True)
+        ]
+
         return {
-            "asset_class": entries_from(
-                snapshot.weights_by_asset_class(), lambda ac: asset_class_label(ac.value)
-            ),
+            "asset_class": asset_class,
             "country": entries_from(snapshot.weights_by_country(), str),
             "currency": entries_from(snapshot.weights_by_currency(), lambda c: c.value),
         }
+
+    @staticmethod
+    def _holdings(snapshot: PortfolioSnapshot) -> list[dict[str, Any]]:
+        """종목별 상세: 수량·평단가·현재가·평가금액·평가손익·비중.
+
+        예수금은 종목이 아니므로 제외한다. 주식/ETF 등 실보유 종목만 담는다.
+        """
+        total = snapshot.total_value.amount
+        rows: list[dict[str, Any]] = []
+        for v in snapshot.valuations:
+            quantity = v.position.quantity.value
+            cost_local = v.position.cost_basis
+            avg_price = cost_local.amount / quantity if quantity != 0 else Decimal(0)
+            pnl_ratio = (
+                v.unrealized_pnl_local.amount / cost_local.amount
+                if cost_local.amount != 0
+                else Decimal(0)
+            )
+            weight = v.market_value_base.amount / total if total > 0 else Decimal(0)
+            rows.append(
+                {
+                    "asset_id": v.asset.asset_id,
+                    "name": v.asset.name,
+                    "asset_class": asset_class_label(v.asset.asset_class.value),
+                    "asset_class_key": v.asset.asset_class.value,
+                    "quantity": format_number(quantity),
+                    "avg_price": format_money(Money(avg_price, cost_local.currency)),
+                    "current_price": format_money(v.price),
+                    "market_value": format_money(v.market_value_base),
+                    "unrealized_pnl": format_money(v.unrealized_pnl_base),
+                    "unrealized_percent": format_percent(pnl_ratio),
+                    "unrealized_positive": v.unrealized_pnl_base.amount >= 0,
+                    "weight": percent_value(weight),
+                }
+            )
+        rows.sort(key=lambda r: r["asset_class_key"])
+        return rows
 
     @staticmethod
     def _targets(snapshot: PortfolioSnapshot, policy: PolicyStatement) -> list[dict[str, Any]]:

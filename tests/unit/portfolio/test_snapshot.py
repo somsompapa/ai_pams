@@ -105,6 +105,17 @@ class TestValuation:
             Decimal("1300000") / Decimal("3430000")
         )
 
+    def test_values_by_asset_class(self) -> None:
+        snapshot = build_snapshot()
+        values = snapshot.values_by_asset_class()
+        assert values[AssetClass.DOMESTIC_STOCK] == Money.of("700000", Currency.KRW)
+        assert values[AssetClass.US_STOCK] == Money.of("1430000", Currency.KRW)
+        # 예수금은 DEPOSIT으로 분류된다
+        assert values[AssetClass.DEPOSIT] == Money.of("1300000", Currency.KRW)
+        # 금액 합계 = 총자산
+        total = sum((m.amount for m in values.values()), Decimal(0))
+        assert total == snapshot.total_value.amount
+
     def test_weights_sum_to_one(self) -> None:
         snapshot = build_snapshot()
         for weights in (

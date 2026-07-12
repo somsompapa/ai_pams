@@ -98,6 +98,67 @@ class TestSnapshotBackfill:
         assert data["performance"]["benchmark_cumulative"] is not None
 
 
+class TestTransactionEntry:
+    def _client(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        monkeypatch.setenv("PAMS_MODE", "real")
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            recorder.execute(as_of=day, base_currency=Currency.KRW)
+        service = real_dashboard_service(project_root)
+        return TestClient(
+            create_app(service, data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+
+    def test_post_transaction_appends_and_reflects(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.post(
+            "/api/transactions",
+            json={
+                "type": "sell",
+                "currency": "KRW",
+                "asset_id": "KRX:005930",
+                "quantity": "30",
+                "price": "82000",
+                "note": "일부 매도",
+            },
+        )
+        assert response.status_code == 201
+        # 파일에 실제로 append 되었는가
+        csv_text = (project_root / "data" / "transactions.csv").read_text(encoding="utf-8")
+        assert "sell" in csv_text and "82000" in csv_text
+        # 재조회 시 보유수량이 100 → 70주로 반영된다
+        service = real_dashboard_service(project_root)
+        data = service.build(as_of=AS_OF, base_currency=Currency.KRW)
+        samsung = next(s for s in data["stocks"] if s["asset_id"] == "KRX:005930")
+        assert samsung["quantity"] == "70.0000"
+
+    def test_invalid_transaction_rejected(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        # 트레이드인데 price 누락 → 400
+        response = client.post(
+            "/api/transactions",
+            json={"type": "buy", "currency": "KRW", "asset_id": "KRX:005930", "quantity": "1"},
+        )
+        assert response.status_code == 400
+
+    def test_demo_mode_blocks_entry(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PAMS_MODE", "demo")
+        client = TestClient(
+            create_app(data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+        response = client.post(
+            "/api/transactions",
+            json={"type": "deposit", "currency": "KRW", "amount": "1000"},
+        )
+        assert response.status_code == 400
+
+
 class TestCli:
     def test_snapshot_command(self, project_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from pams.interfaces.cli.__main__ import main

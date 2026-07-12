@@ -34,7 +34,9 @@ from pams.interfaces.api.service import DashboardService
 from pams.journal.application import ListJournalEntries, RecordJournalEntry
 from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
-from pams.shared_kernel.domain import Currency, DomainError
+from pams.portfolio.domain import Transaction, TransactionType
+from pams.portfolio.infrastructure import CsvDataError, CsvTransactionRepository
+from pams.shared_kernel.domain import Currency, DomainError, Money, Quantity
 
 _PROJECT_ROOT = Path(os.environ.get("PAMS_ROOT") or Path(__file__).resolve().parents[4])
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -53,6 +55,21 @@ class JournalRequest(BaseModel):
 class AnalysisRequest(BaseModel):
     kind: Literal["summary", "risk", "market", "journal_draft"]
     note: str | None = None
+
+
+class TransactionRequest(BaseModel):
+    """웹 거래 입력. 숫자는 float 오차를 막기 위해 문자열로 받는다."""
+
+    type: Literal["buy", "sell", "dividend", "interest", "deposit", "withdrawal", "fee", "tax"]
+    currency: str
+    trade_date: str | None = None
+    asset_id: str | None = None
+    quantity: str | None = None
+    price: str | None = None
+    amount: str | None = None
+    fee: str | None = None
+    tax: str | None = None
+    note: str = ""
 
 
 def _is_real_mode() -> bool:
@@ -266,6 +283,57 @@ def create_app(
             "rule_basis": entry.rule_basis,
             "ai_draft": entry.ai_draft,
         }
+
+    @app.post("/api/transactions", status_code=201)
+    def record_transaction(request: TransactionRequest) -> dict[str, Any]:
+        if not _is_real_mode():
+            raise HTTPException(
+                status_code=400,
+                detail="데모 모드에서는 거래 입력이 비활성이다 (PAMS_MODE=real에서만 기록).",
+            )
+        today = as_of()
+        try:
+            currency = Currency(request.currency)
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"알 수 없는 통화: {request.currency}"
+            ) from None
+        try:
+            trade_date = date.fromisoformat(request.trade_date) if request.trade_date else today
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"잘못된 날짜: {request.trade_date}"
+            ) from None
+
+        def money(value: str | None) -> Money | None:
+            return Money.of(value, currency) if value not in (None, "") else None
+
+        transaction = Transaction(
+            transaction_id=f"{today.isoformat()}-{uuid.uuid4().hex[:8]}",
+            transaction_type=TransactionType(request.type),
+            trade_date=trade_date,
+            asset_id=request.asset_id or None,
+            quantity=Quantity.of(request.quantity) if request.quantity else None,
+            price=money(request.price),
+            amount=money(request.amount),
+            fee=money(request.fee),
+            tax=money(request.tax),
+            note=request.note,
+        )
+        repository = CsvTransactionRepository(storage_dir / "transactions.csv")
+        try:
+            repository.append(transaction)
+        except CsvDataError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        record_audit(
+            actor="user",
+            action="transaction.recorded",
+            detail=(
+                f"거래 {transaction.transaction_id} 기록: {request.type} {request.asset_id or ''}"
+            ),
+            reason=request.note or "웹 거래 입력",
+        )
+        return {"transaction_id": transaction.transaction_id}
 
     @app.post("/api/analysis")
     def generate_analysis(request: AnalysisRequest) -> dict[str, str]:

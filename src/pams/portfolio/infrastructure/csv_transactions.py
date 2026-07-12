@@ -18,6 +18,20 @@ from pathlib import Path
 from pams.portfolio.domain import Transaction, TransactionType
 from pams.shared_kernel.domain import Currency, DomainError, Money, Quantity
 
+_HEADER = [
+    "transaction_id",
+    "type",
+    "trade_date",
+    "asset_id",
+    "quantity",
+    "price",
+    "amount",
+    "fee",
+    "tax",
+    "currency",
+    "note",
+]
+
 
 class CsvDataError(Exception):
     """CSV 데이터 파일을 도메인 객체로 변환하는 데 실패했다."""
@@ -36,6 +50,44 @@ class CsvTransactionRepository:
     def transactions_until(self, as_of: date) -> list[Transaction]:
         transactions = self._load_all()
         return [t for t in transactions if t.trade_date <= as_of]
+
+    def append(self, transaction: Transaction) -> None:
+        """거래 한 건을 파일 끝에 추가한다. 거래내역이 유일한 원천이므로,
+        기존 행은 건드리지 않고 append만 한다. 파일이 없으면 헤더부터 만든다.
+        """
+        if self._path.exists():
+            existing_ids = {t.transaction_id for t in self._load_all()}
+            if transaction.transaction_id in existing_ids:
+                raise CsvDataError(f"중복된 transaction_id '{transaction.transaction_id}'")
+            need_header = self._path.read_text(encoding="utf-8-sig").strip() == ""
+        else:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            need_header = True
+
+        with self._path.open("a", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            if need_header:
+                writer.writerow(_HEADER)
+            writer.writerow(self._to_row(transaction))
+
+    @staticmethod
+    def _to_row(t: Transaction) -> list[str]:
+        def num(value: object) -> str:
+            return "" if value is None else str(value)
+
+        return [
+            t.transaction_id,
+            t.transaction_type.value,
+            t.trade_date.isoformat(),
+            t.asset_id or "",
+            num(t.quantity.value) if t.quantity is not None else "",
+            num(t.price.amount) if t.price is not None else "",
+            num(t.amount.amount) if t.amount is not None else "",
+            num(t.fee.amount) if t.fee is not None else "",
+            num(t.tax.amount) if t.tax is not None else "",
+            t.currency.value,
+            t.note,
+        ]
 
     def _load_all(self) -> list[Transaction]:
         try:

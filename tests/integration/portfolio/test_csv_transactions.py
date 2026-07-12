@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from pams.portfolio.domain import TransactionRepository, TransactionType
+from pams.portfolio.domain import Transaction, TransactionRepository, TransactionType
 from pams.portfolio.infrastructure import CsvDataError, CsvTransactionRepository
+from pams.shared_kernel.domain import Currency, Money, Quantity
 
 HEADER = "transaction_id,type,trade_date,asset_id,quantity,price,amount,fee,tax,currency,note"
 
@@ -22,6 +23,55 @@ def write(tmp_path: Path, content: str) -> Path:
     path = tmp_path / "transactions.csv"
     path.write_text(content, encoding="utf-8")
     return path
+
+
+class TestAppend:
+    def test_append_to_existing_file_and_read_back(self, tmp_path: Path) -> None:
+        repo = CsvTransactionRepository(write(tmp_path, VALID))
+        repo.append(
+            Transaction(
+                transaction_id="t5",
+                transaction_type=TransactionType.SELL,
+                trade_date=date(2026, 7, 15),
+                asset_id="KRX:005930",
+                quantity=Quantity.of("30"),
+                price=Money.of("82000", Currency.KRW),
+                note="일부 매도",
+            )
+        )
+        transactions = repo.transactions_until(date(2026, 12, 31))
+        assert [t.transaction_id for t in transactions] == ["t1", "t2", "t3", "t4", "t5"]
+        sold = transactions[-1]
+        assert sold.transaction_type is TransactionType.SELL
+        assert sold.price is not None and str(sold.price.amount) == "82000"
+        assert sold.note == "일부 매도"
+
+    def test_append_creates_file_with_header_when_missing(self, tmp_path: Path) -> None:
+        path = tmp_path / "transactions.csv"
+        repo = CsvTransactionRepository(path)
+        repo.append(
+            Transaction(
+                transaction_id="t1",
+                transaction_type=TransactionType.DEPOSIT,
+                trade_date=date(2026, 7, 15),
+                amount=Money.of("1000000", Currency.KRW),
+            )
+        )
+        assert path.exists()
+        assert path.read_text(encoding="utf-8").splitlines()[0] == HEADER
+        assert repo.transactions_until(date(2026, 12, 31))[0].transaction_id == "t1"
+
+    def test_append_rejects_duplicate_id(self, tmp_path: Path) -> None:
+        repo = CsvTransactionRepository(write(tmp_path, VALID))
+        with pytest.raises(CsvDataError, match="중복"):
+            repo.append(
+                Transaction(
+                    transaction_id="t1",
+                    transaction_type=TransactionType.DEPOSIT,
+                    trade_date=date(2026, 7, 15),
+                    amount=Money.of("1", Currency.KRW),
+                )
+            )
 
 
 class TestCsvTransactionRepository:

@@ -147,7 +147,12 @@ class PortfolioSnapshot:
             Decimal(0),
         ) + sum((c.value_base.amount for c in self.cash_balances), Decimal(0))
         max_position = max(
-            (v.market_value_base.amount for v in self.valuations), default=Decimal(0)
+            (
+                v.market_value_base.amount
+                for v in self.valuations
+                if not v.asset.asset_class.is_diversification_exempt
+            ),
+            default=Decimal(0),
         )
         return {
             "equity_weight": equity / total,

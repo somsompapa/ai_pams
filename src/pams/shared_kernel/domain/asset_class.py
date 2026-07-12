@@ -28,6 +28,16 @@ class AssetClass(StrEnum):
         """IPS의 '최대 주식비중' 규칙(equity_weight 지표)이 적용되는 주식성 자산 여부."""
         return self in _EQUITY_LIKE
 
+    @property
+    def is_diversification_exempt(self) -> bool:
+        """단일종목 집중도(max_position_weight) 지표에서 제외되는 자산군.
+
+        현금성 자산은 시장위험이 없고, 연금은 계좌 하나로 등록해도 내부에
+        여러 상품이 섞여 있어 '한 종목 쏠림'과 무관하다.
+        """
+        return self in _DIVERSIFICATION_EXEMPT
+
 
 _CASH_LIKE = frozenset({AssetClass.CASH, AssetClass.DEPOSIT, AssetClass.FOREIGN_CURRENCY})
 _EQUITY_LIKE = frozenset({AssetClass.DOMESTIC_STOCK, AssetClass.US_STOCK, AssetClass.ETF})
+_DIVERSIFICATION_EXEMPT = _CASH_LIKE | frozenset({AssetClass.PENSION})

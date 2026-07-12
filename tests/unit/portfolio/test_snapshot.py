@@ -138,6 +138,60 @@ class TestMetrics:
         for value in metrics.values():
             assert isinstance(value, Decimal)
 
+    def test_max_position_excludes_cash_like_and_pension(self) -> None:
+        """단일종목 집중도(max_position_weight)는 개별 종목의 쏠림 위험을 재는 지표다.
+
+        CMA·연금 계좌는 계좌 하나를 자산 1건으로 등록해도 그 안에 여러 상품이
+        섞여 있거나(연금) 애초에 시장 위험이 없는 현금이라(CMA), '집중투자'와
+        무관하다. 금액이 훨씬 커도 이 지표에서는 제외해야 한다.
+        """
+        cma = Asset(
+            asset_id="CASH:CMA",
+            name="CMA",
+            asset_class=AssetClass.CASH,
+            currency=Currency.KRW,
+            country="KR",
+        )
+        pension = Asset(
+            asset_id="PENSION:IRP",
+            name="IRP",
+            asset_class=AssetClass.PENSION,
+            currency=Currency.KRW,
+            country="KR",
+        )
+        positions = dict(POSITIONS)
+        positions[cma.asset_id] = Position(
+            asset_id=cma.asset_id,
+            quantity=Quantity.of(1),
+            cost_basis=Money.of("100000000", Currency.KRW),
+            realized_pnl=Money.zero(Currency.KRW),
+        )
+        positions[pension.asset_id] = Position(
+            asset_id=pension.asset_id,
+            quantity=Quantity.of(1),
+            cost_basis=Money.of("50000000", Currency.KRW),
+            realized_pnl=Money.zero(Currency.KRW),
+        )
+        assets = dict(ASSETS)
+        assets[cma.asset_id] = cma
+        assets[pension.asset_id] = pension
+        prices = dict(PRICES)
+        prices[cma.asset_id] = Money.of("100000000", Currency.KRW)
+        prices[pension.asset_id] = Money.of("50000000", Currency.KRW)
+
+        snapshot = PortfolioValuator().valuate(
+            as_of=AS_OF,
+            base_currency=Currency.KRW,
+            positions=positions,
+            assets=assets,
+            prices=prices,
+            fx_rates=FX,
+            cash_balances=CASH,
+        )
+        metrics = snapshot.metrics()
+        # CMA(1억)·연금(5천만)이 애플(1,430,000)보다 훨씬 크지만 제외되어야 한다
+        assert metrics["max_position_weight"] == Decimal("1430000") / snapshot.total_value.amount
+
 
 class TestMissingData:
     def test_missing_price_raises(self) -> None:

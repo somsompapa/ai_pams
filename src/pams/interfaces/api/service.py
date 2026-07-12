@@ -12,6 +12,12 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from pams.equity.domain import (
+    EvaluateStockAllocation,
+    StockTarget,
+    StockTargetPlan,
+)
+from pams.equity.infrastructure import StockTargetConfigError, YamlStockTargetLoader
 from pams.ips.application import EvaluateCompliance
 from pams.ips.domain import ComplianceReport, EvaluationContext, PolicyStatement
 from pams.ips.infrastructure import YamlPolicyRepository
@@ -142,6 +148,7 @@ class DashboardService:
             "summary": self._summary(snapshot, performance.cumulative_twr, compliance),
             "weights": self._weights(snapshot),
             "holdings": self._holdings(snapshot),
+            "stock_allocation": self._stock_allocation(snapshot, base_currency),
             "targets": self._targets(snapshot, policy),
             "risk": [
                 {"name": name, "label": metric_label(name), "value": format_metric(name, value)}
@@ -253,6 +260,76 @@ class DashboardService:
             )
         rows.sort(key=lambda r: r["asset_class_key"])
         return rows
+
+    def _stock_allocation(
+        self, snapshot: PortfolioSnapshot, base_currency: Currency
+    ) -> dict[str, Any]:
+        """Tier 2: 주식 슬리브(국내+미국) 내 종목별 목표비중·매수/매도 신호.
+
+        config/stock_targets/default.yaml이 있으면 그 목표를, 없으면 현재 비중을
+        목표로 자동 생성한다(프레임워크 우선 - 목표는 사용자가 나중에 조정).
+        """
+        holdings = {
+            v.asset.asset_id: v.market_value_base
+            for v in snapshot.valuations
+            if v.asset.asset_class.is_equity_like and v.market_value_base.is_positive
+        }
+        names = {v.asset.asset_id: v.asset.name for v in snapshot.valuations}
+        if not holdings:
+            return {
+                "configured": False,
+                "sleeve_value": format_money(Money.zero(base_currency)),
+                "rows": [],
+            }
+
+        plan, configured = self._load_stock_plan(holdings, base_currency)
+        report = EvaluateStockAllocation(plan).execute(
+            holdings=holdings, base_currency=base_currency
+        )
+        signal_label = {"buy": "매수", "sell": "매도", "hold": "유지"}
+        rows = [
+            {
+                "asset_id": r.asset_id,
+                "name": names.get(r.asset_id, r.asset_id),
+                "current_weight": percent_value(r.current_weight),
+                "target": percent_value(r.target.target) if r.target else "-",
+                "buy_trigger": percent_value(r.target.buy_trigger) if r.target else "-",
+                "sell_trigger": percent_value(r.target.sell_trigger) if r.target else "-",
+                "signal": r.signal.value,
+                "signal_label": signal_label[r.signal.value],
+                "adjust_amount": format_money(r.adjust_amount),
+                "adjust_positive": r.adjust_amount.amount >= 0,
+            }
+            for r in sorted(report.rows, key=lambda x: x.current_weight.ratio, reverse=True)
+        ]
+        return {
+            "configured": configured,
+            "sleeve_value": format_money(report.sleeve_value),
+            "rows": rows,
+        }
+
+    def _load_stock_plan(
+        self, holdings: dict[str, Money], base_currency: Currency
+    ) -> tuple[StockTargetPlan, bool]:
+        path = self.config_dir / "stock_targets" / "default.yaml"
+        if path.exists():
+            try:
+                return YamlStockTargetLoader(path).load(), True
+            except StockTargetConfigError:
+                pass
+        # 설정이 없으면 현재 비중을 목표로 자동 생성(밴드 ±5%p) - 모두 '유지'
+        sleeve = sum((m.amount for m in holdings.values()), Decimal(0))
+        band = Percentage.from_percent(5)
+        targets = tuple(
+            StockTarget(
+                asset_id=asset_id,
+                target=Percentage.from_ratio(value.amount / sleeve),
+                buy_band=band,
+                sell_band=band,
+            )
+            for asset_id, value in holdings.items()
+        )
+        return StockTargetPlan(targets=targets), False
 
     @staticmethod
     def _targets(snapshot: PortfolioSnapshot, policy: PolicyStatement) -> list[dict[str, Any]]:

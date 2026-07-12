@@ -1,0 +1,19 @@
+# 종목별 목표비중 · 매수/매도 트리거 (Tier 2 — 주식 슬리브 내 배분) — 데모/예시
+#
+# IPS(Tier 1)가 '주식 = 자산 대비 N%'를 정하면, 여기서는 그 주식 슬리브(국내주식+
+# 미국주식) 안에서 종목별 목표비중을 정한다. 현재비중(슬리브 대비)이 밴드를
+# 벗어나면 매수/매도 신호를 낸다. 시스템은 신호까지, 실제 매매는 사용자가 한다.
+#
+# ⚠️ 이 파일은 공개 저장소 예시다. 실제 종목 목표는 개인 투자정보이므로
+#    서버에서 덮어쓰고 git-excluded로 관리한다(config/assets와 동일).
+#
+# 각 target:
+#   asset_id        config/assets/default.yaml의 주식 자산 식별자
+#   target_percent  주식 슬리브 대비 목표비중(%)
+#   band            매수/매도 대칭 밴드(%)  ── 또는 buy_band/sell_band로 개별 지정
+#     매수 트리거 = target_percent - buy_band (이하로 내려가면 매수)
+#     매도 트리거 = target_percent + sell_band (이상으로 올라가면 매도)
+
+targets:
+  - {asset_id: "KRX:005930", target_percent: "40", band: "8"}
+  - {asset_id: "NASDAQ:AAPL", target_percent: "60", band: "8"}

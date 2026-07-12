@@ -53,6 +53,29 @@ class TestDashboardApi:
             assert entry["value"].endswith("KRW")
             assert "percent" in entry
 
+    def test_stock_allocation_section(self, client: TestClient) -> None:
+        data = client.get("/api/dashboard").json()
+        alloc = data["stock_allocation"]
+        assert "configured" in alloc
+        assert alloc["sleeve_value"].endswith("KRW")
+        assert alloc["rows"]
+        sample = alloc["rows"][0]
+        assert set(sample) >= {
+            "asset_id",
+            "name",
+            "current_weight",
+            "target",
+            "buy_trigger",
+            "sell_trigger",
+            "signal",
+            "adjust_amount",
+        }
+        assert sample["signal"] in {"buy", "sell", "hold"}
+        # 데모 주식 종목(삼성전자/애플)만 슬리브에 포함 - 채권/금 등은 제외
+        ids = {r["asset_id"] for r in alloc["rows"]}
+        assert "KRX:005930" in ids
+        assert "KRX:114260" not in ids  # 채권은 주식 슬리브가 아니다
+
     def test_holdings_expose_per_position_detail(self, client: TestClient) -> None:
         data = client.get("/api/dashboard").json()
         holdings = data["holdings"]

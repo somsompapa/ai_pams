@@ -19,6 +19,7 @@ ASSET_CLASS_LABELS: dict[str, str] = {
     "foreign_currency": "외화",
     "gold": "금",
     "pension": "연금",
+    "savings": "청약·저축",
     "crypto": "가상자산",
 }
 

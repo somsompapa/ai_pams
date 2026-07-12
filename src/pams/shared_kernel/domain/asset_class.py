@@ -16,6 +16,7 @@ class AssetClass(StrEnum):
     FOREIGN_CURRENCY = "foreign_currency"  # 외화
     GOLD = "gold"  # 금
     PENSION = "pension"  # 연금
+    SAVINGS = "savings"  # 청약·적립식 저축 (중도해지 페널티로 사실상 묶인 저축)
     CRYPTO = "crypto"  # 가상자산
 
     @property
@@ -40,4 +41,4 @@ class AssetClass(StrEnum):
 
 _CASH_LIKE = frozenset({AssetClass.CASH, AssetClass.DEPOSIT, AssetClass.FOREIGN_CURRENCY})
 _EQUITY_LIKE = frozenset({AssetClass.DOMESTIC_STOCK, AssetClass.US_STOCK, AssetClass.ETF})
-_DIVERSIFICATION_EXEMPT = _CASH_LIKE | frozenset({AssetClass.PENSION})
+_DIVERSIFICATION_EXEMPT = _CASH_LIKE | frozenset({AssetClass.PENSION, AssetClass.SAVINGS})

@@ -40,6 +40,24 @@ class TestAssetClass:
         assert not AssetClass.GOLD.is_equity_like
         assert not AssetClass.CASH.is_equity_like
 
+    def test_savings_asset_class_supported(self) -> None:
+        """청약·적립식 저축은 중도해지 페널티로 사실상 묶인 저축 자산이다."""
+        assert AssetClass.SAVINGS.value == "savings"
+
+    def test_diversification_exempt_classification(self) -> None:
+        """단일종목 집중도 지표 제외 대상: 현금성 + 연금 + 저축(청약).
+
+        모두 '한 종목 쏠림' 위험과 무관하다(현금은 시장위험 없음,
+        연금·청약은 계좌 단위 등록).
+        """
+        assert AssetClass.CASH.is_diversification_exempt
+        assert AssetClass.DEPOSIT.is_diversification_exempt
+        assert AssetClass.FOREIGN_CURRENCY.is_diversification_exempt
+        assert AssetClass.PENSION.is_diversification_exempt
+        assert AssetClass.SAVINGS.is_diversification_exempt
+        assert not AssetClass.US_STOCK.is_diversification_exempt
+        assert not AssetClass.GOLD.is_diversification_exempt
+
 
 class TestAsset:
     def make_asset(self, **overrides: object) -> Asset:

@@ -10,6 +10,10 @@
       매일 실행(cron 권장)하면 리스크/성과 시계열이 쌓인다.
       과거 시세가 data/prices.csv에 있으면 --date로 과거일 백필도 가능하다.
 
+  dca [--date YYYY-MM-DD] [--root DIR]
+      config/dca/default.yaml의 적립매수 계획에서 해당 일자에 매수 예정인
+      주문 목록을 출력한다. 시스템은 제안만 하고 실제 매수는 사용자가 한다.
+
   report [--date YYYY-MM-DD] [--root DIR]
       전체 투자 보고서(요약/자산배분/IPS 준수/리스크/리밸런싱/성과)를
       reports/ 에 Markdown·HTML로 생성한다. 한글 폰트가 있으면 PDF도 생성.
@@ -49,6 +53,26 @@ def _run_snapshot(root: Path, as_of: date) -> int:
     if point.net_flow != 0:
         print(f" (당일 입출금 {point.net_flow:+,.0f})", end="")
     print()
+    return 0
+
+
+def _run_dca(root: Path, as_of: date) -> int:
+    from pams.dca.application import PlanDcaOrders
+    from pams.interfaces.wiring import load_dca_plan
+
+    orders = PlanDcaOrders(plan=load_dca_plan(root)).execute(as_of=as_of)
+    if not orders:
+        print(f"{as_of}: 오늘 예정된 DCA 매수가 없다 (주말/비영업일이거나 계획 없음)")
+        return 0
+    print(f"{as_of} DCA 매수 예정 {len(orders)}건 (실행은 사용자가 한다):")
+    for order in orders:
+        if order.amount is not None:
+            what = f"{order.amount.amount:,.0f} {order.amount.currency}"
+        else:
+            assert order.quantity is not None
+            what = f"{order.quantity.value:g}주"
+        note = f"  # {order.note}" if order.note else ""
+        print(f"  - {order.asset_id}: {what}{note}")
     return 0
 
 
@@ -124,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     for name, description in (
         ("fetch", "외부 시세/환율/VIX 수집"),
         ("snapshot", "총자산을 가치 이력에 적재"),
+        ("dca", "오늘 매수 예정인 DCA 주문 목록"),
         ("report", "투자 보고서 생성 (reports/)"),
         ("alert", "규칙 발동 시 텔레그램 알림"),
     ):
@@ -137,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     runners = {
         "fetch": _run_fetch,
         "snapshot": _run_snapshot,
+        "dca": _run_dca,
         "report": _run_report,
         "alert": _run_alert,
     }

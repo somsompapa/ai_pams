@@ -32,9 +32,7 @@ class TestProjectRoot:
 
         assert cli_main._PROJECT_ROOT == tmp_path
 
-    def test_falls_back_to_source_tree_without_env(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_falls_back_to_source_tree_without_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("PAMS_ROOT", raising=False)
         import pams.interfaces.cli.__main__ as cli_main
 

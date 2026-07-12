@@ -1,0 +1,28 @@
+# DCA(정액·정량 분할매수) 계획 — 데모/예시
+#
+# 대기자금을 시장 타이밍 없이 정기적으로 나눠 투입하는 적립식 매수 규칙.
+# 시스템은 "오늘 매수 예정분"을 계산해 제안까지만 하고, 실제 매수/기록은 사용자가 한다.
+#
+# ⚠️ 이 파일은 공개 저장소에 포함되는 예시다. 실제 매수 계획(종목·금액)은
+#    개인 투자정보이므로, 서버에서 이 파일을 덮어쓰고 git에 올리지 않는다
+#    (.git/info/exclude 등록). config/assets/default.yaml과 동일한 방식.
+#
+# 각 entry:
+#   asset_id   config/assets/default.yaml에 등록된 자산 식별자
+#   frequency  daily(매 평일) 또는 weekly
+#   weekday    weekly일 때만 (monday~sunday)
+#   amount+currency  정액 매수 (예: 매일 100000 KRW)  ── amount와 quantity 중 하나만
+#   quantity         정량 매수 (예: 1주)
+
+entries:
+  - asset_id: "NASDAQ:AAPL"
+    frequency: daily
+    amount: "100000"
+    currency: KRW
+    note: (예시) 애플 매일 10만원
+
+  - asset_id: "KRX:069500"
+    frequency: weekly
+    weekday: monday
+    quantity: "1"
+    note: (예시) KODEX 200 매주 월요일 1주

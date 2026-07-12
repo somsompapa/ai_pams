@@ -23,6 +23,8 @@ from pathlib import Path
 import yaml
 
 from pams.asset.infrastructure import YamlAssetCatalog
+from pams.dca.domain import DcaPlan
+from pams.dca.infrastructure import YamlDcaPlanLoader
 from pams.interfaces.api.service import DashboardService
 from pams.ips.infrastructure import YamlPolicyRepository
 from pams.market_data.application import FetchMarketData, FetchResult
@@ -136,6 +138,13 @@ def fetch_market_data(project_root: Path, provider: QuoteProvider | None = None)
     result = FetchMarketData(provider=quote_provider).execute(symbols=symbols)
     MarketDataFileWriter(data_dir=project_root / "data").write(result)
     return result
+
+
+def load_dca_plan(project_root: Path) -> DcaPlan:
+    path = project_root / "config" / "dca" / "default.yaml"
+    if not path.exists():
+        raise RealDataError(f"DCA 계획 파일이 없다: {path} - 예시: examples/dca.yaml")
+    return YamlDcaPlanLoader(path).load()
 
 
 def real_dashboard_service(project_root: Path) -> DashboardService:

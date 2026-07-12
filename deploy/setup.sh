@@ -3,7 +3,7 @@
 # PAMS 원커맨드 설치 스크립트 (Ubuntu 22.04/24.04 서버에서 실행)
 #
 # 사용법 (서버에 SSH 접속한 뒤):
-#   curl -fsSL https://raw.githubusercontent.com/somsompapa/ai_fams/main/deploy/setup.sh -o setup.sh
+#   curl -fsSL https://raw.githubusercontent.com/somsompapa/ai_pams/main/deploy/setup.sh -o setup.sh
 #   PAMS_PASSWORD='길고-강한-비밀번호' bash setup.sh
 #
 # 선택 환경변수:
@@ -13,9 +13,9 @@
 #
 set -euo pipefail
 
-REPO_URL="https://github.com/somsompapa/ai_fams.git"
+REPO_URL="https://github.com/somsompapa/ai_pams.git"
 BRANCH="${PAMS_BRANCH:-main}"
-APP_DIR="$HOME/ai_fams"
+APP_DIR="$HOME/ai_pams"
 
 echo "==> [1/5] 필수 패키지 설치 (docker, git)"
 if ! command -v docker >/dev/null 2>&1; then

@@ -65,8 +65,8 @@ tailscale ip -4            # 이 서버의 Tailscale 주소 확인 (예: 100.x.y
 ## 5. PAMS 실행
 
 ```bash
-git clone https://github.com/somsompapa/ai_fams.git
-cd ai_fams
+git clone https://github.com/somsompapa/ai_pams.git
+cd ai_pams
 
 docker build -t pams .
 
@@ -114,7 +114,7 @@ crontab -e
 
 ```bash
 # 코드 업데이트
-cd ai_fams && git pull && docker build -t pams . \
+cd ai_pams && git pull && docker build -t pams . \
   && docker rm -f pams && docker run -d --name pams --restart unless-stopped \
      -p 8000:8000 -v $(pwd)/data:/app/data -e PAMS_MODE=real -e PAMS_PASSWORD='...' pams
 

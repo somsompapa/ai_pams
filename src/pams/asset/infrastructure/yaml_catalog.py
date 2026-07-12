@@ -17,10 +17,42 @@ class AssetConfigError(Exception):
     """자산 카탈로그 파일을 읽는 데 실패했다."""
 
 
+def append_asset(path: Path, asset: Asset) -> None:
+    """자산 마스터에 새 종목 한 건을 추가한다(같은 asset_id가 있으면 거부).
+
+    도메인 Asset으로 이미 검증된 값만 받는다. 기존 목록은 유지하고 추가만 한다.
+    """
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else None
+    assets = (
+        list(document["assets"]) if isinstance(document, dict) and document.get("assets") else []
+    )
+    if any(isinstance(e, dict) and e.get("asset_id") == asset.asset_id for e in assets):
+        raise AssetConfigError(f"이미 등록된 asset_id '{asset.asset_id}'")
+
+    entry: dict[str, str] = {
+        "asset_id": asset.asset_id,
+        "name": asset.name,
+        "asset_class": asset.asset_class.value,
+        "currency": asset.currency.value,
+        "country": asset.country,
+    }
+    if asset.sector is not None:
+        entry["sector"] = asset.sector
+    assets.append(entry)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = "# 자산 마스터 데이터 (대시보드에서 관리됨)\n"
+    body = yaml.safe_dump(
+        {"assets": assets}, allow_unicode=True, sort_keys=False, default_flow_style=False
+    )
+    path.write_text(header + body, encoding="utf-8")
+
+
 class YamlAssetCatalog:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._assets: dict[str, Asset] | None = None
+        self._loaded_mtime: float | None = None
 
     def get(self, asset_id: str) -> Asset | None:
         return self._load().get(asset_id)
@@ -29,8 +61,14 @@ class YamlAssetCatalog:
         return list(self._load().values())
 
     def _load(self) -> dict[str, Asset]:
-        if self._assets is not None:
+        # 파일이 바뀌면(웹에서 종목 추가 등) 자동으로 다시 읽는다.
+        try:
+            mtime: float | None = self._path.stat().st_mtime
+        except OSError:
+            mtime = None
+        if self._assets is not None and mtime == self._loaded_mtime:
             return self._assets
+        self._loaded_mtime = mtime
         try:
             document = yaml.safe_load(self._path.read_text(encoding="utf-8"))
         except OSError as error:

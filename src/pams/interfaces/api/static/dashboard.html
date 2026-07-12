@@ -109,6 +109,9 @@
     padding: 0.5rem 1.2rem; border: none; border-radius: 0.5rem;
     background: var(--accent, #3b82f6); color: #fff; font-weight: 600; cursor: pointer;
   }
+  .sub-form { margin-top: 0.8rem; border-top: 1px solid var(--line); padding-top: 0.6rem; }
+  .sub-form summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; padding: 0.3rem 0; }
+  .sub-form .tx-form { margin-top: 0.5rem; }
   th { color: var(--muted); font-weight: 600; }
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: 0.6rem; }
   .metric { border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.5rem 0.7rem; }
@@ -202,6 +205,50 @@
     <h2>주식 종목 (보유 · 매수/매도 트리거)</h2>
     <div class="holdings-scroll"><table id="stocks-table"></table></div>
     <p id="stocks-note" class="empty"></p>
+    <details class="sub-form">
+      <summary>＋ 매수/매도 가격선(트리거) 설정</summary>
+      <form id="trigger-form" class="tx-form">
+        <input id="tg-asset" list="asset-options" placeholder="종목 (예: KRX:005930)" required>
+        <select id="tg-currency">
+          <option value="KRW">KRW</option>
+          <option value="USD">USD</option>
+          <option value="JPY">JPY</option>
+        </select>
+        <input id="tg-buy" placeholder="매수선(이하 매수)" inputmode="decimal">
+        <input id="tg-sell" placeholder="매도선(이상 매도)" inputmode="decimal">
+        <button type="submit">트리거 저장</button>
+      </form>
+      <p id="tg-msg" class="empty">현재가가 매수선 이하로 내려가면 매수, 매도선 이상이면 매도 신호가 '오늘의 액션'에 뜬다.</p>
+    </details>
+    <details class="sub-form">
+      <summary>＋ 새 종목 추가</summary>
+      <form id="asset-form" class="tx-form">
+        <input id="as-id" placeholder="종목코드 (예: NASDAQ:NVDA)" required>
+        <input id="as-name" placeholder="이름 (예: 엔비디아)" required>
+        <select id="as-class">
+          <option value="domestic_stock">국내주식</option>
+          <option value="us_stock">미국주식</option>
+          <option value="etf">ETF</option>
+          <option value="bond">채권</option>
+          <option value="gold">금</option>
+          <option value="cash">현금</option>
+          <option value="deposit">예수금</option>
+          <option value="foreign_currency">외화</option>
+          <option value="pension">연금</option>
+          <option value="savings">청약·저축</option>
+          <option value="crypto">가상자산</option>
+        </select>
+        <select id="as-currency">
+          <option value="KRW">KRW</option>
+          <option value="USD">USD</option>
+          <option value="JPY">JPY</option>
+        </select>
+        <input id="as-country" placeholder="국가 (예: KR, US)" value="KR" required>
+        <input id="as-yahoo" placeholder="Yahoo 심볼 (예: NVDA, 005930.KS)">
+        <button type="submit">종목 추가</button>
+      </form>
+      <p id="as-msg" class="empty">추가하면 거래 입력·시세 자동수집에서 이 종목을 쓸 수 있다.</p>
+    </details>
   </section>
   <section class="card" data-tab="portfolio"><h2>자산군 비중</h2><div id="w-asset"></div></section>
   <section class="card" data-tab="portfolio"><h2>목표비중 대비 (허용밴드 ±)</h2><div id="targets"></div></section>
@@ -457,6 +504,49 @@ el("tx-form").addEventListener("submit", async (event) => {
     msg.className = "";
     msg.textContent = "기록 실패: " + (body.detail ?? response.status);
   }
+});
+
+async function postConfig(url, payload, msgId) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const msg = el(msgId);
+  msg.className = "";
+  if (response.ok) {
+    msg.textContent = "✅ 저장 완료 — 다시 계산 중…";
+    load();
+    loadAudit();
+    return true;
+  }
+  const body = await response.json().catch(() => ({}));
+  msg.textContent = "저장 실패: " + (body.detail ?? response.status);
+  return false;
+}
+
+el("trigger-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const ok = await postConfig("/api/triggers", {
+    asset_id: el("tg-asset").value,
+    currency: el("tg-currency").value,
+    buy_at: el("tg-buy").value || null,
+    sell_at: el("tg-sell").value || null,
+  }, "tg-msg");
+  if (ok) el("trigger-form").reset();
+});
+
+el("asset-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const ok = await postConfig("/api/assets", {
+    asset_id: el("as-id").value,
+    name: el("as-name").value,
+    asset_class: el("as-class").value,
+    currency: el("as-currency").value,
+    country: el("as-country").value,
+    yahoo_symbol: el("as-yahoo").value || null,
+  }, "as-msg");
+  if (ok) el("asset-form").reset();
 });
 
 el("journal-form").addEventListener("submit", async (event) => {

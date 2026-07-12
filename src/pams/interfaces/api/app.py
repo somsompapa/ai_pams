@@ -26,17 +26,28 @@ from pydantic import BaseModel
 from pams.ai_analysis.application import GenerateAnalysis
 from pams.ai_analysis.domain import AnalysisKind, TextCompletion
 from pams.ai_analysis.infrastructure import AnthropicTextCompletion, GeminiTextCompletion
+from pams.asset.infrastructure import AssetConfigError, append_asset
 from pams.audit.application import RecordAuditEvent
 from pams.audit.domain import AuditEvent
 from pams.audit.infrastructure import JsonlAuditTrail
+from pams.equity.domain import PriceTrigger
+from pams.equity.infrastructure import save_price_trigger
 from pams.interfaces.api import demo
 from pams.interfaces.api.service import DashboardService
 from pams.journal.application import ListJournalEntries, RecordJournalEntry
 from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
+from pams.market_data.infrastructure import upsert_price_symbol
 from pams.portfolio.domain import Transaction, TransactionType
 from pams.portfolio.infrastructure import CsvDataError, CsvTransactionRepository
-from pams.shared_kernel.domain import Currency, DomainError, Money, Quantity
+from pams.shared_kernel.domain import (
+    Asset,
+    AssetClass,
+    Currency,
+    DomainError,
+    Money,
+    Quantity,
+)
 
 _PROJECT_ROOT = Path(os.environ.get("PAMS_ROOT") or Path(__file__).resolve().parents[4])
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -70,6 +81,27 @@ class TransactionRequest(BaseModel):
     fee: str | None = None
     tax: str | None = None
     note: str = ""
+
+
+class AssetRequest(BaseModel):
+    """새 종목 등록. Yahoo 심볼을 주면 시세 자동수집에도 추가된다."""
+
+    asset_id: str
+    name: str
+    asset_class: str
+    currency: str
+    country: str
+    sector: str | None = None
+    yahoo_symbol: str | None = None
+
+
+class TriggerRequest(BaseModel):
+    """종목별 매수/매도 가격선. 숫자는 문자열로 받는다."""
+
+    asset_id: str
+    currency: str
+    buy_at: str | None = None
+    sell_at: str | None = None
 
 
 def _is_real_mode() -> bool:
@@ -334,6 +366,73 @@ def create_app(
             reason=request.note or "웹 거래 입력",
         )
         return {"transaction_id": transaction.transaction_id}
+
+    def _require_real_mode() -> None:
+        if not _is_real_mode():
+            raise HTTPException(
+                status_code=400,
+                detail="데모 모드에서는 설정 변경이 비활성이다 (PAMS_MODE=real에서만).",
+            )
+
+    @app.post("/api/assets", status_code=201)
+    def register_asset(request: AssetRequest) -> dict[str, Any]:
+        _require_real_mode()
+        try:
+            asset = Asset(
+                asset_id=request.asset_id.strip(),
+                name=request.name.strip(),
+                asset_class=AssetClass(request.asset_class),
+                currency=Currency(request.currency),
+                country=request.country.strip(),
+                sector=(request.sector.strip() if request.sector else None),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=f"잘못된 자산군/통화: {error}") from None
+        config_dir = dashboard_service.config_dir
+        try:
+            append_asset(config_dir / "assets" / "default.yaml", asset)
+        except AssetConfigError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if request.yahoo_symbol and request.yahoo_symbol.strip():
+            upsert_price_symbol(
+                config_dir / "market" / "symbols.yaml",
+                asset.asset_id,
+                request.yahoo_symbol.strip(),
+            )
+        record_audit(
+            actor="user",
+            action="asset.registered",
+            detail=f"종목 등록: {asset.asset_id} ({asset.name})",
+            reason="웹 종목 추가",
+        )
+        return {"asset_id": asset.asset_id}
+
+    @app.post("/api/triggers", status_code=201)
+    def save_trigger(request: TriggerRequest) -> dict[str, Any]:
+        _require_real_mode()
+        try:
+            currency = Currency(request.currency)
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"알 수 없는 통화: {request.currency}"
+            ) from None
+
+        def money(value: str | None) -> Money | None:
+            return Money.of(value, currency) if value not in (None, "") else None
+
+        trigger = PriceTrigger(
+            asset_id=request.asset_id.strip(),
+            buy_at=money(request.buy_at),
+            sell_at=money(request.sell_at),
+        )
+        save_price_trigger(dashboard_service.config_dir / "triggers" / "default.yaml", trigger)
+        record_audit(
+            actor="user",
+            action="trigger.saved",
+            detail=f"트리거 설정: {trigger.asset_id}",
+            reason="웹 트리거 설정",
+        )
+        return {"asset_id": trigger.asset_id}
 
     @app.post("/api/analysis")
     def generate_analysis(request: AnalysisRequest) -> dict[str, str]:

@@ -10,9 +10,40 @@ import yaml
 from pams.equity.domain import PriceTrigger, PriceTriggerPlan
 from pams.shared_kernel.domain import Currency, DomainError, Money
 
+_TRIGGER_HEADER = (
+    "# 종목별 절대가격 매수/매도 트리거 (대시보드에서 관리됨)\n"
+    "# 현재가가 buy_at 이하면 매수, sell_at 이상이면 매도 신호가 '오늘의 액션'에 뜬다.\n"
+)
+
 
 class PriceTriggerConfigError(Exception):
     """가격 트리거 설정 파일을 PriceTriggerPlan으로 변환하는 데 실패했다."""
+
+
+def save_price_trigger(path: Path, trigger: PriceTrigger) -> None:
+    """가격 트리거 한 건을 upsert 한다(같은 asset_id는 교체). 파일이 없으면 만든다.
+
+    도메인 PriceTrigger로 이미 검증된 값만 받으므로 여기서는 직렬화만 한다.
+    숫자는 문자열로 저장해 float 오차를 만들지 않는다.
+    """
+    entries: list[dict[str, str]] = []
+    if path.exists():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = document.get("triggers", []) if isinstance(document, dict) else []
+        entries = [e for e in raw if isinstance(e, dict) and e.get("asset_id") != trigger.asset_id]
+
+    entry: dict[str, str] = {"asset_id": trigger.asset_id, "currency": str(trigger.currency)}
+    if trigger.buy_at is not None:
+        entry["buy_at"] = str(trigger.buy_at.amount)
+    if trigger.sell_at is not None:
+        entry["sell_at"] = str(trigger.sell_at.amount)
+    entries.append(entry)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = yaml.safe_dump(
+        {"triggers": entries}, allow_unicode=True, sort_keys=False, default_flow_style=False
+    )
+    path.write_text(_TRIGGER_HEADER + body, encoding="utf-8")
 
 
 class YamlPriceTriggerLoader:

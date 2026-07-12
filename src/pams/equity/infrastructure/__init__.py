@@ -7,6 +7,7 @@ from pams.equity.infrastructure.yaml_targets import (
 from pams.equity.infrastructure.yaml_triggers import (
     PriceTriggerConfigError,
     YamlPriceTriggerLoader,
+    save_price_trigger,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "StockTargetConfigError",
     "YamlPriceTriggerLoader",
     "YamlStockTargetLoader",
+    "save_price_trigger",
 ]

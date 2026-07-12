@@ -159,6 +159,92 @@ class TestTransactionEntry:
         assert response.status_code == 400
 
 
+class TestAssetAndTriggerEntry:
+    def _client(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        monkeypatch.setenv("PAMS_MODE", "real")
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            recorder.execute(as_of=day, base_currency=Currency.KRW)
+        service = real_dashboard_service(project_root)
+        return TestClient(
+            create_app(service, data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+
+    def test_register_new_asset_then_trade_it(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        resp = client.post(
+            "/api/assets",
+            json={
+                "asset_id": "NASDAQ:NVDA",
+                "name": "엔비디아",
+                "asset_class": "us_stock",
+                "currency": "USD",
+                "country": "US",
+                "yahoo_symbol": "NVDA",
+            },
+        )
+        assert resp.status_code == 201
+        # 자산 파일과 심볼 파일에 반영
+        assets_yaml = (project_root / "config" / "assets" / "default.yaml").read_text("utf-8")
+        assert "NASDAQ:NVDA" in assets_yaml
+        symbols_yaml = (project_root / "config" / "market" / "symbols.yaml").read_text("utf-8")
+        assert "NASDAQ:NVDA" in symbols_yaml and "NVDA" in symbols_yaml
+
+    def test_duplicate_asset_rejected(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        resp = client.post(
+            "/api/assets",
+            json={
+                "asset_id": "KRX:005930",
+                "name": "삼성전자",
+                "asset_class": "domestic_stock",
+                "currency": "KRW",
+                "country": "KR",
+            },
+        )
+        assert resp.status_code == 400
+
+    def test_save_trigger_then_reflected_in_stocks(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        resp = client.post(
+            "/api/triggers",
+            json={
+                "asset_id": "KRX:005930",
+                "currency": "KRW",
+                "buy_at": "70000",
+                "sell_at": "90000",
+            },
+        )
+        assert resp.status_code == 201
+        service = real_dashboard_service(project_root)
+        data = service.build(as_of=AS_OF, base_currency=Currency.KRW)
+        samsung = next(s for s in data["stocks"] if s["asset_id"] == "KRX:005930")
+        assert samsung["buy_trigger"] == "70,000 KRW"
+        assert samsung["sell_trigger"] == "90,000 KRW"
+
+    def test_invalid_trigger_rejected(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        # 매수가 > 매도가 → 400
+        resp = client.post(
+            "/api/triggers",
+            json={
+                "asset_id": "KRX:005930",
+                "currency": "KRW",
+                "buy_at": "90000",
+                "sell_at": "70000",
+            },
+        )
+        assert resp.status_code == 400
+
+
 class TestCli:
     def test_snapshot_command(self, project_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from pams.interfaces.cli.__main__ import main

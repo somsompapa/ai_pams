@@ -22,13 +22,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import date
 from pathlib import Path
 
 from pams.interfaces.wiring import real_base_currency, real_valuation_recorder
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+_PROJECT_ROOT = Path(os.environ.get("PAMS_ROOT") or Path(__file__).resolve().parents[4])
 
 
 def _run_fetch(root: Path, as_of: date) -> int:

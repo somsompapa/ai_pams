@@ -38,6 +38,18 @@ else
 fi
 cd "$APP_DIR"
 
+# 개인 설정 파일은 git이 덮어쓰지 않도록 보호(skip-worktree).
+# 서버에서 편집·웹에서 저장한 내용이 배포/pull 때 데모로 되돌아가지 않는다.
+for f in \
+  config/assets/default.yaml \
+  config/ips/default.yaml \
+  config/dca/default.yaml \
+  config/triggers/default.yaml \
+  config/stock_targets/default.yaml \
+  config/market/symbols.yaml; do
+  [ -f "$f" ] && git update-index --skip-worktree "$f" 2>/dev/null || true
+done
+
 echo "==> [3/5] 비밀번호 준비"
 if [ -z "${PAMS_PASSWORD:-}" ]; then
   PAMS_PASSWORD="$(openssl rand -base64 18 2>/dev/null || head -c 24 /dev/urandom | base64)"

@@ -21,6 +21,11 @@
   alert [--date YYYY-MM-DD] [--root DIR]
       규칙을 평가해 발동(위반/주의)이 있으면 텔레그램으로 알림을 보낸다.
       환경변수 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID 필요.
+
+  signals [--date YYYY-MM-DD] [--root DIR]
+      '오늘의 액션'(가격 트리거·DCA·리밸런싱)을 텔레그램으로 보낸다.
+      가격 트리거·리밸런싱은 새로 발동한 것만, DCA는 매일 알린다(중복 방지).
+      환경변수 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID 필요.
 """
 
 from __future__ import annotations
@@ -73,6 +78,32 @@ def _run_dca(root: Path, as_of: date) -> int:
             what = f"{order.quantity.value:g}주"
         note = f"  # {order.note}" if order.note else ""
         print(f"  - {order.asset_id}: {what}{note}")
+    return 0
+
+
+def _run_signals(root: Path, as_of: date) -> int:
+    import os
+
+    from pams.interfaces.notifications import (
+        SignalStateStore,
+        TelegramNotifier,
+        run_signal_alert,
+    )
+    from pams.interfaces.wiring import real_dashboard_service
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        print("실패: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 환경변수가 필요하다", file=sys.stderr)
+        return 1
+    data = real_dashboard_service(root).build(as_of=as_of, base_currency=real_base_currency(root))
+    sent = run_signal_alert(
+        as_of=data["as_of"],
+        actions=data["today_actions"],
+        store=SignalStateStore(root / "data" / "signal_state.json"),
+        notifier=TelegramNotifier(token=token, chat_id=chat_id),
+    )
+    print("오늘의 액션 알림 전송 완료" if sent else "새로 알릴 신호가 없어 전송하지 않았다")
     return 0
 
 
@@ -151,6 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         ("dca", "오늘 매수 예정인 DCA 주문 목록"),
         ("report", "투자 보고서 생성 (reports/)"),
         ("alert", "규칙 발동 시 텔레그램 알림"),
+        ("signals", "오늘의 액션(트리거·DCA·리밸런싱) 텔레그램 알림"),
     ):
         sub = subcommands.add_parser(name, help=description)
         sub.add_argument("--date", dest="as_of", default=None, help="YYYY-MM-DD (기본: 오늘)")
@@ -165,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         "dca": _run_dca,
         "report": _run_report,
         "alert": _run_alert,
+        "signals": _run_signals,
     }
 
     try:

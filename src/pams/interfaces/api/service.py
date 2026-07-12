@@ -334,16 +334,10 @@ class DashboardService:
     @staticmethod
     def _targets(snapshot: PortfolioSnapshot, policy: PolicyStatement) -> list[dict[str, Any]]:
         current = snapshot.weights_by_asset_class()
-        cash_like_total = sum(
-            (weight.ratio for ac, weight in current.items() if ac.is_cash_like), Decimal(0)
-        )
         rows = []
         for target in policy.targets:
-            if target.asset_class.is_cash_like:
-                ratio = cash_like_total
-            else:
-                weight = current.get(target.asset_class)
-                ratio = weight.ratio if weight is not None else Decimal(0)
+            weight = current.get(target.asset_class)
+            ratio = weight.ratio if weight is not None else Decimal(0)
             status = (
                 "ok"
                 if target.contains(Percentage.from_ratio(ratio))

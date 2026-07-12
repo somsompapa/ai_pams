@@ -91,6 +91,7 @@ docker run -d --name pams --restart unless-stopped -p 8000:8000 \
 - `PAMS_PASSWORD`를 설정하면 모든 화면/API에 로그인이 필요하다.
 - 외부 접속은 서버를 인터넷에 공개하는 대신 **Tailscale**(서버·폰에 설치)을 권장한다.
 - 폰 브라우저에서 접속 후 "홈 화면에 추가"하면 앱처럼 설치된다(PWA).
+- **무료 클라우드 배포**(PC 안 켜두기): [Oracle Cloud Always Free 배포 가이드](docs/deploy-oracle-cloud.md)
 - 서버 crontab 예시(평일 18시): `0 18 * * 1-5 docker exec pams sh -c 'python -m pams.interfaces.cli fetch && python -m pams.interfaces.cli snapshot && python -m pams.interfaces.cli alert'`
 
 상세 설계는 [`docs/architecture.md`](docs/architecture.md)를 참고.

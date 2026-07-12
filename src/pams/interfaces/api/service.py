@@ -12,12 +12,21 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from pams.dca.application import PlanDcaOrders
+from pams.dca.infrastructure import DcaConfigError, YamlDcaPlanLoader
 from pams.equity.domain import (
+    EvaluatePriceTriggers,
     EvaluateStockAllocation,
+    StockSignal,
     StockTarget,
     StockTargetPlan,
 )
-from pams.equity.infrastructure import StockTargetConfigError, YamlStockTargetLoader
+from pams.equity.infrastructure import (
+    PriceTriggerConfigError,
+    StockTargetConfigError,
+    YamlPriceTriggerLoader,
+    YamlStockTargetLoader,
+)
 from pams.ips.application import EvaluateCompliance
 from pams.ips.domain import ComplianceReport, EvaluationContext, PolicyStatement
 from pams.ips.infrastructure import YamlPolicyRepository
@@ -146,8 +155,10 @@ class DashboardService:
             "base_currency": base_currency.value,
             "policy_name": policy.name,
             "summary": self._summary(snapshot, performance.cumulative_twr, compliance),
+            "today_actions": self._today_actions(snapshot, proposal, as_of),
             "weights": self._weights(snapshot),
             "holdings": self._holdings(snapshot),
+            "stocks": self._stocks(snapshot),
             "stock_allocation": self._stock_allocation(snapshot, base_currency),
             "targets": self._targets(snapshot, policy),
             "risk": [
@@ -175,6 +186,99 @@ class DashboardService:
                 ],
             },
         }
+
+    def _today_actions(
+        self, snapshot: PortfolioSnapshot, proposal: RebalancingProposal, as_of: date
+    ) -> list[dict[str, Any]]:
+        """오늘 무엇을 사고/팔지 — 세 신호원을 우선순위로 합친 액션 목록.
+
+        1) 가격 트리거(사용자가 정한 매수/매도 가격선을 현재가가 건드림)
+        2) 정기 매수(DCA) 예정
+        3) 리밸런싱 밴드 이탈(자산군 단위)
+        시스템은 신호까지만 제시하고 실행은 사용자가 한다.
+        """
+        names = {v.asset.asset_id: v.asset.name for v in snapshot.valuations}
+        actions: list[dict[str, Any]] = []
+
+        # 1) 가격 트리거
+        trigger_path = self.config_dir / "triggers" / "default.yaml"
+        if trigger_path.exists():
+            try:
+                plan = YamlPriceTriggerLoader(trigger_path).load()
+            except PriceTriggerConfigError:
+                plan = None
+            if plan is not None:
+                prices = {v.asset.asset_id: v.price for v in snapshot.valuations}
+                for row in EvaluatePriceTriggers(plan).execute(current_prices=prices).firing:
+                    is_buy = row.signal is StockSignal.BUY
+                    bound = row.trigger.buy_at if is_buy else row.trigger.sell_at
+                    assert bound is not None
+                    actions.append(
+                        {
+                            "source": "price_trigger",
+                            "source_label": "가격 트리거",
+                            "asset_id": row.asset_id,
+                            "asset": names.get(row.asset_id, row.asset_id),
+                            "direction": "buy" if is_buy else "sell",
+                            "direction_label": "매수" if is_buy else "매도",
+                            "reason": (
+                                f"현재가 {format_money(row.current_price)} "
+                                f"{'≤ 매수선' if is_buy else '≥ 매도선'} {format_money(bound)}"
+                            ),
+                            "guide": "",
+                        }
+                    )
+
+        # 2) 정기 매수(DCA) 예정
+        dca_path = self.config_dir / "dca" / "default.yaml"
+        if dca_path.exists():
+            try:
+                dca_plan = YamlDcaPlanLoader(dca_path).load()
+            except DcaConfigError:
+                dca_plan = None
+            if dca_plan is not None:
+                for order in PlanDcaOrders(plan=dca_plan).execute(as_of=as_of):
+                    if order.amount is not None:
+                        guide = format_money(order.amount)
+                    else:
+                        assert order.quantity is not None
+                        guide = f"{order.quantity.value:g}주"
+                    actions.append(
+                        {
+                            "source": "dca",
+                            "source_label": "정기 매수(DCA)",
+                            "asset_id": order.asset_id,
+                            "asset": names.get(order.asset_id, order.asset_id),
+                            "direction": "buy",
+                            "direction_label": "매수",
+                            "reason": "정기 적립매수 예정",
+                            "guide": guide,
+                        }
+                    )
+
+        # 3) 리밸런싱 밴드 이탈(자산군 단위)
+        for a in proposal.actions:
+            is_buy = a.direction is TradeDirection.BUY
+            actions.append(
+                {
+                    "source": "rebalancing",
+                    "source_label": "리밸런싱",
+                    "asset_id": a.asset_class.value,
+                    "asset": asset_class_label(a.asset_class.value),
+                    "direction": "buy" if is_buy else "sell",
+                    "direction_label": "매수" if is_buy else "매도",
+                    "reason": (
+                        f"밴드 이탈: 현재 {percent_value(a.current_weight)}% "
+                        f"→ 목표 {percent_value(a.target_weight)}%"
+                    ),
+                    "guide": format_money(a.amount),
+                }
+            )
+
+        # 매수/매도 신호를 앞으로, 신호원 순서 유지
+        order_key = {"price_trigger": 0, "rebalancing": 1, "dca": 2}
+        actions.sort(key=lambda x: order_key.get(x["source"], 9))
+        return actions
 
     def _summary(
         self,
@@ -259,6 +363,66 @@ class DashboardService:
                 }
             )
         rows.sort(key=lambda r: r["asset_class_key"])
+        return rows
+
+    def _stocks(self, snapshot: PortfolioSnapshot) -> list[dict[str, Any]]:
+        """주식 종목 상세(주식만): 보유 정보 + 가격 트리거·신호를 한 표로.
+
+        사용자가 '언제 사고 팔지'를 종목 단위로 보는 화면. 채권·금·현금 등은 제외.
+        """
+        equities = [v for v in snapshot.valuations if v.asset.asset_class.is_equity_like]
+        if not equities:
+            return []
+
+        plan = None
+        trigger_path = self.config_dir / "triggers" / "default.yaml"
+        if trigger_path.exists():
+            try:
+                plan = YamlPriceTriggerLoader(trigger_path).load()
+            except PriceTriggerConfigError:
+                plan = None
+
+        total = snapshot.total_value.amount
+        signal_label = {"buy": "매수", "sell": "매도", "hold": "유지"}
+        rows: list[dict[str, Any]] = []
+        for v in equities:
+            quantity = v.position.quantity.value
+            cost = v.position.cost_basis
+            avg_price = cost.amount / quantity if quantity != 0 else Decimal(0)
+            pnl_ratio = (
+                v.unrealized_pnl_local.amount / cost.amount if cost.amount != 0 else Decimal(0)
+            )
+            trigger = plan.trigger_for(v.asset.asset_id) if plan is not None else None
+            if trigger is not None:
+                signal = trigger.signal(v.price).value
+                buy_at = format_money(trigger.buy_at) if trigger.buy_at is not None else "-"
+                sell_at = format_money(trigger.sell_at) if trigger.sell_at is not None else "-"
+            else:
+                signal = "none"
+                buy_at = "-"
+                sell_at = "-"
+            rows.append(
+                {
+                    "asset_id": v.asset.asset_id,
+                    "name": v.asset.name,
+                    "asset_class": asset_class_label(v.asset.asset_class.value),
+                    "quantity": format_number(quantity),
+                    "avg_price": format_money(Money(avg_price, cost.currency)),
+                    "current_price": format_money(v.price),
+                    "market_value": format_money(v.market_value_base),
+                    "unrealized_pnl": format_money(v.unrealized_pnl_base),
+                    "unrealized_percent": format_percent(pnl_ratio),
+                    "unrealized_positive": v.unrealized_pnl_base.amount >= 0,
+                    "weight": percent_value(
+                        v.market_value_base.amount / total if total > 0 else Decimal(0)
+                    ),
+                    "buy_trigger": buy_at,
+                    "sell_trigger": sell_at,
+                    "signal": signal,
+                    "signal_label": signal_label.get(signal, "미설정"),
+                }
+            )
+        rows.sort(key=lambda r: r["name"])
         return rows
 
     def _stock_allocation(

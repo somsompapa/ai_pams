@@ -5,7 +5,7 @@ create_app()에 다른 DashboardService를 주입하면 된다.
 
 AI 해설은 TextCompletion 구현이 있어야 동작한다:
 - 테스트/개발: create_app(completion=...) 주입
-- 운영: 환경변수 ANTHROPIC_API_KEY(필수), PAMS_AI_MODEL(선택) 설정
+- 운영: 환경변수 GEMINI_API_KEY(권장) 또는 ANTHROPIC_API_KEY, PAMS_AI_MODEL(선택) 설정
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 from pams.ai_analysis.application import GenerateAnalysis
 from pams.ai_analysis.domain import AnalysisKind, TextCompletion
-from pams.ai_analysis.infrastructure import AnthropicTextCompletion
+from pams.ai_analysis.infrastructure import AnthropicTextCompletion, GeminiTextCompletion
 from pams.audit.application import RecordAuditEvent
 from pams.audit.domain import AuditEvent
 from pams.audit.infrastructure import JsonlAuditTrail
@@ -39,6 +39,7 @@ from pams.shared_kernel.domain import Currency, DomainError
 _PROJECT_ROOT = Path(os.environ.get("PAMS_ROOT") or Path(__file__).resolve().parents[4])
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _DEFAULT_AI_MODEL = "claude-sonnet-5"
+_DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
 
 
 class JournalRequest(BaseModel):
@@ -84,11 +85,17 @@ def _default_as_of() -> date:
 
 
 def _completion_from_env() -> TextCompletion | None:
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
-        return None
-    model = os.environ.get("PAMS_AI_MODEL", "").strip() or _DEFAULT_AI_MODEL
-    return AnthropicTextCompletion(api_key=api_key, model=model)
+    """환경변수로 AI 해설 공급자를 고른다. Gemini 키가 있으면 Gemini 우선."""
+    model = os.environ.get("PAMS_AI_MODEL", "").strip()
+    gemini_key = (
+        os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GOOGLE_API_KEY", "").strip()
+    )
+    if gemini_key:
+        return GeminiTextCompletion(api_key=gemini_key, model=model or _DEFAULT_GEMINI_MODEL)
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if anthropic_key:
+        return AnthropicTextCompletion(api_key=anthropic_key, model=model or _DEFAULT_AI_MODEL)
+    return None
 
 
 def _facts_from_dashboard(data: dict[str, Any]) -> list[str]:
@@ -265,7 +272,9 @@ def create_app(
         if text_completion is None:
             raise HTTPException(
                 status_code=503,
-                detail="AI 해설을 사용할 수 없다 - ANTHROPIC_API_KEY를 설정하라",
+                detail=(
+                    "AI 해설을 사용할 수 없다 - GEMINI_API_KEY(또는 ANTHROPIC_API_KEY)를 설정하라"
+                ),
             )
         data = dashboard_service.build(as_of=as_of(), base_currency=Currency.KRW)
         narrative = GenerateAnalysis(completion=text_completion).execute(

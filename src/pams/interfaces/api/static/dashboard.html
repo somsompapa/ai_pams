@@ -74,7 +74,31 @@
   th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); }
   td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .holdings-scroll { overflow-x: auto; }
-  #holdings-table { min-width: 640px; }
+  #holdings-table, #stocks-table { min-width: 720px; }
+  nav#tabs { max-width: 1100px; margin: 0 auto; padding: 0 1rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  .tab-btn {
+    background: transparent; border: 1px solid var(--line); color: var(--muted);
+    padding: 0.5rem 1rem; border-radius: 0.6rem 0.6rem 0 0; cursor: pointer; font-size: 0.9rem;
+  }
+  .tab-btn.active { background: var(--card); color: var(--text); font-weight: 600; border-bottom-color: var(--card); }
+  main section[data-tab] { display: none; }
+  main.tab-today section[data-tab="today"],
+  main.tab-portfolio section[data-tab="portfolio"],
+  main.tab-analysis section[data-tab="analysis"],
+  main.tab-journal section[data-tab="journal"] { display: block; }
+  .card.hero { border-color: color-mix(in srgb, var(--accent, #3b82f6) 40%, var(--line)); }
+  .action-row {
+    display: flex; align-items: center; gap: 0.7rem; padding: 0.7rem 0.5rem;
+    border-bottom: 1px solid var(--line); flex-wrap: wrap;
+  }
+  .action-row .dir { font-size: 1rem; font-weight: 700; min-width: 3rem; }
+  .action-row .dir.buy { color: var(--ok); }
+  .action-row .dir.sell { color: var(--bad); }
+  .action-row .asset { font-weight: 600; min-width: 6rem; }
+  .action-row .src { font-size: 0.72rem; color: var(--muted); border: 1px solid var(--line); border-radius: 1rem; padding: 0.1rem 0.5rem; }
+  .action-row .why { color: var(--muted); font-size: 0.85rem; flex: 1; }
+  .action-row .guide { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .disclaimer { color: var(--muted); font-size: 0.75rem; margin-top: 0.8rem; }
   th { color: var(--muted); font-weight: 600; }
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: 0.6rem; }
   .metric { border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.5rem 0.7rem; }
@@ -109,8 +133,15 @@
   <button id="theme-toggle" type="button">🌓 테마</button>
 </header>
 
+<nav id="tabs" hidden>
+  <button type="button" class="tab-btn active" data-tab="today">오늘의 액션</button>
+  <button type="button" class="tab-btn" data-tab="portfolio">포트폴리오</button>
+  <button type="button" class="tab-btn" data-tab="analysis">분석</button>
+  <button type="button" class="tab-btn" data-tab="journal">일지·AI</button>
+</nav>
+
 <main id="main" hidden>
-  <section class="card wide">
+  <section class="card wide" data-tab="today">
     <h2>요약</h2>
     <div class="kpis">
       <div class="kpi"><div class="label">총자산</div><div class="value" id="total-value"></div></div>
@@ -122,34 +153,34 @@
     </div>
   </section>
 
-  <section class="card"><h2>자산군 비중</h2><div id="w-asset"></div></section>
-  <section class="card"><h2>목표비중 대비 (허용밴드 ±)</h2><div id="targets"></div></section>
-  <section class="card wide">
-    <h2>종목별 보유 현황</h2>
-    <div class="holdings-scroll"><table id="holdings-table"></table></div>
+  <section class="card wide hero" data-tab="today">
+    <h2>오늘의 액션 — 언제 사고/팔지</h2>
+    <div id="actions"></div>
+    <p class="disclaimer">모든 신호는 Rule/트리거 엔진의 계산 결과다. 실제 매매 실행 여부는 사용자가 결정한다.</p>
   </section>
-  <section class="card wide">
-    <h2>주식 종목 배분 · 매수/매도 신호 <span id="alloc-sleeve" class="empty"></span></h2>
-    <div class="holdings-scroll"><table id="alloc-table"></table></div>
-    <p id="alloc-note" class="empty"></p>
+
+  <section class="card wide" data-tab="portfolio">
+    <h2>주식 종목 (보유 · 매수/매도 트리거)</h2>
+    <div class="holdings-scroll"><table id="stocks-table"></table></div>
+    <p id="stocks-note" class="empty"></p>
   </section>
-  <section class="card"><h2>국가 비중</h2><div id="w-country"></div></section>
-  <section class="card"><h2>통화 비중</h2><div id="w-currency"></div></section>
+  <section class="card" data-tab="portfolio"><h2>자산군 비중</h2><div id="w-asset"></div></section>
+  <section class="card" data-tab="portfolio"><h2>목표비중 대비 (허용밴드 ±)</h2><div id="targets"></div></section>
+  <section class="card" data-tab="portfolio"><h2>국가 비중</h2><div id="w-country"></div></section>
+  <section class="card" data-tab="portfolio"><h2>통화 비중</h2><div id="w-currency"></div></section>
 
-  <section class="card"><h2>리스크 지표</h2><div class="grid2" id="risk"></div></section>
-  <section class="card"><h2>알림</h2><div id="alerts"></div></section>
-
-  <section class="card wide">
+  <section class="card" data-tab="analysis"><h2>리스크 지표</h2><div class="grid2" id="risk"></div></section>
+  <section class="card" data-tab="analysis"><h2>알림</h2><div id="alerts"></div></section>
+  <section class="card wide" data-tab="analysis">
     <h2>리밸런싱 제안</h2>
     <div id="rebalancing"></div>
   </section>
-
-  <section class="card wide">
+  <section class="card wide" data-tab="analysis">
     <h2>월간 성과 (포트폴리오 vs 벤치마크, %)</h2>
     <table id="perf-table"></table>
   </section>
 
-  <section class="card">
+  <section class="card" data-tab="journal">
     <h2>AI 해설 (참고용 — 계산·판단에 관여하지 않음)</h2>
     <div class="ai-controls">
       <select id="ai-kind">
@@ -163,7 +194,7 @@
     <div id="ai-output" class="empty">아직 생성된 해설이 없다.</div>
   </section>
 
-  <section class="card">
+  <section class="card" data-tab="journal">
     <h2>투자일지</h2>
     <form id="journal-form">
       <input id="j-title" placeholder="제목" required>
@@ -175,7 +206,7 @@
     <div id="journal-list" class="empty">기록이 없다.</div>
   </section>
 
-  <section class="card wide">
+  <section class="card wide" data-tab="journal">
     <h2>감사 로그 (최근 활동)</h2>
     <table id="audit-table"><tbody><tr><td class="empty">기록이 없다.</td></tr></tbody></table>
   </section>
@@ -246,44 +277,40 @@ async function load() {
     </div>`;
   }).join("");
 
-  el("holdings-table").innerHTML = (d.holdings && d.holdings.length)
-    ? `<thead><tr>
-         <th>종목</th><th>자산군</th><th class="num">수량</th><th class="num">평단가</th>
-         <th class="num">현재가</th><th class="num">평가금액</th><th class="num">평가손익</th><th class="num">비중</th>
-       </tr></thead>
-       <tbody>${d.holdings.map((h) => `
-         <tr>
-           <td><strong>${esc(h.name)}</strong><br><span class="empty">${esc(h.asset_id)}</span></td>
-           <td>${esc(h.asset_class)}</td>
-           <td class="num">${esc(h.quantity)}</td>
-           <td class="num">${esc(h.avg_price)}</td>
-           <td class="num">${esc(h.current_price)}</td>
-           <td class="num">${esc(h.market_value)}</td>
-           <td class="num ${h.unrealized_positive ? "pnl-up" : "pnl-down"}">${esc(h.unrealized_pnl)} (${esc(h.unrealized_percent)})</td>
-           <td class="num">${esc(h.weight)}%</td>
-         </tr>`).join("")}</tbody>`
-    : '<tbody><tr><td class="empty">보유 종목이 없다.</td></tr></tbody>';
+  const sigBadge = { buy: '<span class="badge buy">매수</span>', sell: '<span class="badge sell">매도</span>', hold: '<span class="badge hold">유지</span>', none: '<span class="badge hold">미설정</span>' };
 
-  const al = d.stock_allocation || {rows: []};
-  el("alloc-sleeve").textContent = al.rows.length ? `(주식 슬리브 ${al.sleeve_value})` : "";
-  el("alloc-note").textContent = al.rows.length
-    ? (al.configured ? "" : "※ 종목 목표 미설정 — 현재 비중을 목표로 자동 표시 중이다. config/stock_targets로 목표·트리거를 설정하면 매수/매도 신호가 활성화된다.")
-    : "보유 주식 종목이 없다.";
-  const sigBadge = { buy: '<span class="badge buy">매수</span>', sell: '<span class="badge sell">매도</span>', hold: '<span class="badge hold">유지</span>' };
-  el("alloc-table").innerHTML = al.rows.length
+  const acts = d.today_actions || [];
+  el("actions").innerHTML = acts.length
+    ? acts.map((a) => `
+      <div class="action-row">
+        <span class="dir ${a.direction}">${esc(a.direction_label)}</span>
+        <span class="asset">${esc(a.asset)}</span>
+        <span class="src">${esc(a.source_label)}</span>
+        <span class="why">${esc(a.reason)}</span>
+        <span class="guide">${esc(a.guide || "")}</span>
+      </div>`).join("")
+    : '<p class="empty">오늘은 발동한 매수/매도 신호가 없다. (가격 트리거·DCA·리밸런싱 모두 조건 미충족)</p>';
+
+  const stocks = d.stocks || [];
+  el("stocks-note").textContent = stocks.some((s) => s.signal === "none")
+    ? "※ 일부 종목은 가격 트리거 미설정 상태다. config/triggers로 매수/매도 가격선을 정하면 신호가 활성화된다."
+    : "";
+  el("stocks-table").innerHTML = stocks.length
     ? `<thead><tr>
-         <th>종목</th><th class="num">현재%(주식대비)</th><th class="num">목표%</th>
-         <th class="num">매수↓</th><th class="num">매도↑</th><th>신호</th><th class="num">조정금액</th>
+         <th>종목</th><th class="num">수량</th><th class="num">평단가</th><th class="num">현재가</th>
+         <th class="num">평가손익</th><th class="num">매수선↓</th><th class="num">매도선↑</th><th>신호</th><th class="num">비중</th>
        </tr></thead>
-       <tbody>${al.rows.map((r) => `
+       <tbody>${stocks.map((s) => `
          <tr>
-           <td><strong>${esc(r.name)}</strong><br><span class="empty">${esc(r.asset_id)}</span></td>
-           <td class="num">${esc(r.current_weight)}%</td>
-           <td class="num">${esc(r.target)}${r.target === "-" ? "" : "%"}</td>
-           <td class="num">${esc(r.buy_trigger)}${r.buy_trigger === "-" ? "" : "%"}</td>
-           <td class="num">${esc(r.sell_trigger)}${r.sell_trigger === "-" ? "" : "%"}</td>
-           <td>${sigBadge[r.signal] || esc(r.signal_label)}</td>
-           <td class="num ${r.adjust_positive ? "pnl-up" : "pnl-down"}">${esc(r.adjust_amount)}</td>
+           <td><strong>${esc(s.name)}</strong><br><span class="empty">${esc(s.asset_id)}</span></td>
+           <td class="num">${esc(s.quantity)}</td>
+           <td class="num">${esc(s.avg_price)}</td>
+           <td class="num">${esc(s.current_price)}</td>
+           <td class="num ${s.unrealized_positive ? "pnl-up" : "pnl-down"}">${esc(s.unrealized_pnl)} (${esc(s.unrealized_percent)})</td>
+           <td class="num">${esc(s.buy_trigger)}</td>
+           <td class="num">${esc(s.sell_trigger)}</td>
+           <td>${sigBadge[s.signal] || esc(s.signal_label)}</td>
+           <td class="num">${esc(s.weight)}%</td>
          </tr>`).join("")}</tbody>`
     : '<tbody><tr><td class="empty">보유 주식 종목이 없다.</td></tr></tbody>';
 
@@ -318,7 +345,18 @@ async function load() {
     </tbody>`;
 
   el("main").hidden = false;
+  el("tabs").hidden = false;
 }
+
+function setTab(name) {
+  const main = el("main");
+  main.className = "tab-" + name;
+  document.querySelectorAll(".tab-btn").forEach((b) =>
+    b.classList.toggle("active", b.dataset.tab === name));
+}
+document.querySelectorAll(".tab-btn").forEach((b) =>
+  b.addEventListener("click", () => setTab(b.dataset.tab)));
+setTab("today");
 
 async function loadJournal() {
   const response = await fetch("/api/journal");

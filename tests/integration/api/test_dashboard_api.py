@@ -53,6 +53,24 @@ class TestDashboardApi:
             assert entry["value"].endswith("KRW")
             assert "percent" in entry
 
+    def test_today_actions_present(self, client: TestClient) -> None:
+        data = client.get("/api/dashboard").json()
+        assert "today_actions" in data
+        actions = data["today_actions"]
+        # 데모: 리밸런싱 밴드 이탈이 있어 최소 1건 이상
+        assert isinstance(actions, list)
+        if actions:
+            a = actions[0]
+            assert set(a) >= {
+                "source",
+                "asset",
+                "direction",
+                "direction_label",
+                "reason",
+            }
+            assert a["direction"] in {"buy", "sell"}
+            assert a["source"] in {"price_trigger", "dca", "rebalancing"}
+
     def test_stock_allocation_section(self, client: TestClient) -> None:
         data = client.get("/api/dashboard").json()
         alloc = data["stock_allocation"]

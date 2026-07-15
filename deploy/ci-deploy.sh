@@ -32,7 +32,7 @@ docker run -d --name pams --restart unless-stopped \
   --env-file "$ENV_FILE" \
   -v "$APP_DIR/data:/app/data" \
   -v "$APP_DIR/config:/app/config" \
-  -p 127.0.0.1:8000:8000 \
+  -p 8000:8000 \
   pams
 
 echo "==> [4/4] 헬스체크"

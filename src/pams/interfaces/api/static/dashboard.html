@@ -84,6 +84,7 @@
   main section[data-tab] { display: none; }
   main.tab-today section[data-tab="today"],
   main.tab-portfolio section[data-tab="portfolio"],
+  main.tab-manage section[data-tab="manage"],
   main.tab-analysis section[data-tab="analysis"],
   main.tab-journal section[data-tab="journal"] { display: block; }
   .card.hero { border-color: color-mix(in srgb, var(--accent, #3b82f6) 40%, var(--line)); }
@@ -149,6 +150,7 @@
 <nav id="tabs" hidden>
   <button type="button" class="tab-btn active" data-tab="today">오늘의 액션</button>
   <button type="button" class="tab-btn" data-tab="portfolio">포트폴리오</button>
+  <button type="button" class="tab-btn" data-tab="manage">관리</button>
   <button type="button" class="tab-btn" data-tab="analysis">분석</button>
   <button type="button" class="tab-btn" data-tab="journal">일지·AI</button>
 </nav>
@@ -173,6 +175,21 @@
   </section>
 
   <section class="card wide" data-tab="portfolio">
+    <h2>주식 종목 (보유 · 매수/매도 트리거)</h2>
+    <div class="holdings-scroll"><table id="stocks-table"></table></div>
+    <p id="stocks-note" class="empty"></p>
+  </section>
+  <section class="card wide" data-tab="portfolio">
+    <h2>종목별 목표비중 (Tier 2 — 주식 슬리브 내 배분)</h2>
+    <div class="holdings-scroll"><table id="stock-target-table"></table></div>
+    <p id="stock-target-note" class="empty"></p>
+  </section>
+  <section class="card" data-tab="portfolio"><h2>자산군 비중</h2><div id="w-asset"></div></section>
+  <section class="card" data-tab="portfolio"><h2>목표비중 대비 (허용밴드 ±)</h2><div id="targets"></div></section>
+  <section class="card" data-tab="portfolio"><h2>국가 비중</h2><div id="w-country"></div></section>
+  <section class="card" data-tab="portfolio"><h2>통화 비중</h2><div id="w-currency"></div></section>
+
+  <section class="card wide" data-tab="manage">
     <h2>거래 입력 (매수 · 매도 · 입출금)</h2>
     <form id="tx-form" class="tx-form">
       <select id="tx-type">
@@ -227,17 +244,15 @@
       <p id="hr-msg" class="empty">차액만큼 현재가로 매수/매도 거래가 자동 기록된다 (평균단가·평가손익에 영향을 준다).</p>
     </details>
   </section>
-  <section class="card wide" data-tab="portfolio">
+  <section class="card wide" data-tab="manage">
     <h2>거래 내역</h2>
     <div class="holdings-scroll"><table id="tx-table"></table></div>
     <p id="tx-list-msg" class="empty"></p>
   </section>
-  <section class="card wide" data-tab="portfolio">
-    <h2>주식 종목 (보유 · 매수/매도 트리거)</h2>
-    <div class="holdings-scroll"><table id="stocks-table"></table></div>
-    <p id="stocks-note" class="empty"></p>
-    <details class="sub-form">
-      <summary>＋ 매수/익절/손절 가격선(트리거) 설정</summary>
+  <section class="card wide" data-tab="manage">
+    <h2>가격 트리거 설정</h2>
+    <details class="sub-form" open>
+      <summary>매수/익절/손절 가격선(트리거) 설정</summary>
       <form id="trigger-form" class="tx-form">
         <input id="tg-asset" list="asset-options" placeholder="종목 (예: KRX:005930)" required>
         <select id="tg-currency">
@@ -263,58 +278,49 @@
       <p id="bt-msg" class="empty">손절선 = 평단가×(1−%), 익절선 = 평단가×(1+%), 매수선 = 현재가×(1−%). 이미 평단가 대비 크게 벗어나 순서(손절&lt;매수&lt;익절)가 깨지는 종목은 건너뛰고 아래에 표시한다.</p>
       <div id="bt-result"></div>
     </details>
-    <details class="sub-form">
-      <summary>＋ 종목 관리 (추가·수정·삭제)</summary>
-      <form id="asset-form" class="tx-form">
-        <input id="as-id" placeholder="종목코드 (예: NASDAQ:NVDA)" required>
-        <input id="as-name" placeholder="이름 (예: 엔비디아)" required>
-        <select id="as-class">
-          <option value="domestic_stock">국내주식</option>
-          <option value="us_stock">미국주식</option>
-          <option value="etf">ETF</option>
-          <option value="bond">채권</option>
-          <option value="gold">금</option>
-          <option value="cash">현금</option>
-          <option value="deposit">예수금</option>
-          <option value="foreign_currency">외화</option>
-          <option value="pension">연금</option>
-          <option value="savings">청약·저축</option>
-          <option value="crypto">가상자산</option>
-        </select>
-        <select id="as-currency">
-          <option value="KRW">KRW</option>
-          <option value="USD">USD</option>
-          <option value="JPY">JPY</option>
-        </select>
-        <input id="as-country" placeholder="국가 (예: KR, US)" value="KR" required>
-        <input id="as-yahoo" placeholder="Yahoo 심볼 (예: NVDA, 005930.KS)">
-        <input type="hidden" id="as-edit-id" value="">
-        <button type="submit" id="as-submit-btn">종목 추가</button>
-        <button type="button" id="as-cancel-btn" style="display:none">취소</button>
-      </form>
-      <p id="as-msg" class="empty">추가하면 거래 입력·시세 자동수집에서 이 종목을 쓸 수 있다.</p>
-      <div class="holdings-scroll"><table id="asset-table"></table></div>
-    </details>
   </section>
-  <section class="card" data-tab="portfolio"><h2>자산군 비중</h2><div id="w-asset"></div></section>
-  <section class="card" data-tab="portfolio"><h2>목표비중 대비 (허용밴드 ±)</h2><div id="targets"></div></section>
-  <section class="card" data-tab="portfolio"><h2>국가 비중</h2><div id="w-country"></div></section>
-  <section class="card" data-tab="portfolio"><h2>통화 비중</h2><div id="w-currency"></div></section>
-  <section class="card wide" data-tab="portfolio">
-    <h2>종목별 목표비중 (Tier 2 — 주식 슬리브 내 배분)</h2>
-    <div class="holdings-scroll"><table id="stock-target-table"></table></div>
-    <p id="stock-target-note" class="empty"></p>
-    <details class="sub-form">
-      <summary>＋ 종목 목표비중 설정</summary>
-      <form id="stock-target-form" class="tx-form">
-        <input id="st-asset" list="asset-options" placeholder="종목 (예: KRX:005930)" required>
-        <input id="st-target" placeholder="목표비중(슬리브 대비 %)" inputmode="decimal" required>
-        <input id="st-buy-band" placeholder="매수 밴드(%)" inputmode="decimal" required>
-        <input id="st-sell-band" placeholder="매도 밴드(%)" inputmode="decimal" required>
-        <button type="submit">목표비중 저장</button>
-      </form>
-      <p id="st-msg" class="empty">매수 트리거 = 목표−매수밴드(이하면 매수) · 매도 트리거 = 목표+매도밴드(이상이면 매도)</p>
-    </details>
+  <section class="card wide" data-tab="manage">
+    <h2>종목 관리 (추가·수정·삭제)</h2>
+    <form id="asset-form" class="tx-form">
+      <input id="as-id" placeholder="종목코드 (예: NASDAQ:NVDA)" required>
+      <input id="as-name" placeholder="이름 (예: 엔비디아)" required>
+      <select id="as-class">
+        <option value="domestic_stock">국내주식</option>
+        <option value="us_stock">미국주식</option>
+        <option value="etf">ETF</option>
+        <option value="bond">채권</option>
+        <option value="gold">금</option>
+        <option value="cash">현금</option>
+        <option value="deposit">예수금</option>
+        <option value="foreign_currency">외화</option>
+        <option value="pension">연금</option>
+        <option value="savings">청약·저축</option>
+        <option value="crypto">가상자산</option>
+      </select>
+      <select id="as-currency">
+        <option value="KRW">KRW</option>
+        <option value="USD">USD</option>
+        <option value="JPY">JPY</option>
+      </select>
+      <input id="as-country" placeholder="국가 (예: KR, US)" value="KR" required>
+      <input id="as-yahoo" placeholder="Yahoo 심볼 (예: NVDA, 005930.KS)">
+      <input type="hidden" id="as-edit-id" value="">
+      <button type="submit" id="as-submit-btn">종목 추가</button>
+      <button type="button" id="as-cancel-btn" style="display:none">취소</button>
+    </form>
+    <p id="as-msg" class="empty">추가하면 거래 입력·시세 자동수집에서 이 종목을 쓸 수 있다.</p>
+    <div class="holdings-scroll"><table id="asset-table"></table></div>
+  </section>
+  <section class="card wide" data-tab="manage">
+    <h2>종목 목표비중 설정 (Tier 2)</h2>
+    <form id="stock-target-form" class="tx-form">
+      <input id="st-asset" list="asset-options" placeholder="종목 (예: KRX:005930)" required>
+      <input id="st-target" placeholder="목표비중(슬리브 대비 %)" inputmode="decimal" required>
+      <input id="st-buy-band" placeholder="매수 밴드(%)" inputmode="decimal" required>
+      <input id="st-sell-band" placeholder="매도 밴드(%)" inputmode="decimal" required>
+      <button type="submit">목표비중 저장</button>
+    </form>
+    <p id="st-msg" class="empty">매수 트리거 = 목표−매수밴드(이하면 매수) · 매도 트리거 = 목표+매도밴드(이상이면 매도). 결과는 '포트폴리오' 탭의 종목별 목표비중 표에 반영된다.</p>
   </section>
 
   <section class="card" data-tab="analysis"><h2>리스크 지표</h2><div class="grid2" id="risk"></div></section>

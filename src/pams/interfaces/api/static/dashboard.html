@@ -110,6 +110,16 @@
     padding: 0.5rem 1.2rem; border: none; border-radius: 0.5rem;
     background: var(--accent, #3b82f6); color: #fff; font-weight: 600; cursor: pointer;
   }
+  .tx-filters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.7rem; }
+  .tx-filters input, .tx-filters select {
+    padding: 0.4rem 0.6rem; border: 1px solid var(--line); border-radius: 0.5rem;
+    background: var(--bg); color: var(--text); font-size: 0.85rem; width: auto;
+  }
+  .tx-filters input#tx-filter-text { width: 10rem; }
+  .tx-filters button {
+    padding: 0.4rem 0.9rem; border: 1px solid var(--line); border-radius: 0.5rem;
+    background: var(--card); color: var(--text); cursor: pointer; font-size: 0.85rem;
+  }
   .sub-form { margin-top: 0.8rem; border-top: 1px solid var(--line); padding-top: 0.6rem; }
   .sub-form summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; padding: 0.3rem 0; }
   .sub-form .tx-form { margin-top: 0.5rem; }
@@ -246,6 +256,23 @@
   </section>
   <section class="card wide" data-tab="manage">
     <h2>거래 내역</h2>
+    <div class="tx-filters">
+      <input id="tx-filter-from" type="date" title="시작일">
+      <input id="tx-filter-to" type="date" title="종료일">
+      <select id="tx-filter-type">
+        <option value="">전체 구분</option>
+        <option value="buy">매수</option>
+        <option value="sell">매도</option>
+        <option value="dividend">배당</option>
+        <option value="interest">이자</option>
+        <option value="deposit">입금</option>
+        <option value="withdrawal">출금</option>
+        <option value="fee">수수료</option>
+        <option value="tax">세금</option>
+      </select>
+      <input id="tx-filter-text" placeholder="종목/메모 검색">
+      <button type="button" id="tx-filter-reset">초기화</button>
+    </div>
     <div class="holdings-scroll"><table id="tx-table"></table></div>
     <p id="tx-list-msg" class="empty"></p>
   </section>
@@ -322,6 +349,25 @@
     </form>
     <p id="st-msg" class="empty">매수 트리거 = 목표−매수밴드(이하면 매수) · 매도 트리거 = 목표+매도밴드(이상이면 매도). 결과는 '포트폴리오' 탭의 종목별 목표비중 표에 반영된다.</p>
   </section>
+  <section class="card wide" data-tab="manage">
+    <h2>환율 입력</h2>
+    <form id="fx-form" class="tx-form">
+      <select id="fx-base">
+        <option value="USD">USD</option>
+        <option value="JPY">JPY</option>
+        <option value="EUR">EUR</option>
+        <option value="CNY">CNY</option>
+        <option value="GBP">GBP</option>
+        <option value="HKD">HKD</option>
+        <option value="CHF">CHF</option>
+      </select>
+      <span>→ KRW</span>
+      <input id="fx-rate" placeholder="환율 (1 외화 = ? KRW)" inputmode="decimal" required>
+      <input id="fx-date" type="date">
+      <button type="submit">환율 저장</button>
+    </form>
+    <p id="fx-msg" class="empty">fetch(자동수집)가 못 받아온 통화(예: JPY)를 직접 입력할 때 쓴다. 날짜를 비우면 오늘 날짜로 저장된다.</p>
+  </section>
 
   <section class="card" data-tab="analysis"><h2>리스크 지표</h2><div class="grid2" id="risk"></div></section>
   <section class="card" data-tab="analysis"><h2>알림</h2><div id="alerts"></div></section>
@@ -362,6 +408,10 @@
 
   <section class="card wide" data-tab="journal">
     <h2>감사 로그 (최근 활동)</h2>
+    <div class="tx-filters">
+      <input id="audit-filter-text" placeholder="행동/내용 검색">
+      <button type="button" id="audit-load-more">더 보기</button>
+    </div>
     <table id="audit-table"><tbody><tr><td class="empty">기록이 없다.</td></tr></tbody></table>
   </section>
 </main>
@@ -613,11 +663,9 @@ const txTypeLabel = {
   deposit: "입금", withdrawal: "출금", fee: "수수료", tax: "세금",
 };
 
-async function loadTransactions() {
-  const response = await fetch("/api/transactions");
-  if (!response.ok) return;
-  const { transactions } = await response.json();
+let allTransactions = [];
 
+function renderTxTable(transactions) {
   el("tx-table").innerHTML = transactions.length
     ? `<thead><tr>
          <th>날짜</th><th>구분</th><th>종목</th><th class="num">수량</th><th class="num">가격</th>
@@ -637,11 +685,11 @@ async function loadTransactions() {
              <button type="button" class="tx-delete" data-id="${esc(t.transaction_id)}">삭제</button>
            </td>
          </tr>`).join("")}</tbody>`
-    : '<tbody><tr><td class="empty">거래 내역이 없다.</td></tr></tbody>';
+    : '<tbody><tr><td class="empty">조건에 맞는 거래 내역이 없다.</td></tr></tbody>';
 
   el("tx-table").querySelectorAll(".tx-edit").forEach((btn) =>
     btn.addEventListener("click", () => {
-      const t = transactions.find((x) => x.transaction_id === btn.dataset.id);
+      const t = allTransactions.find((x) => x.transaction_id === btn.dataset.id);
       if (!t) return;
       el("tx-type").value = t.type;
       el("tx-currency").value = t.currency;
@@ -673,6 +721,42 @@ async function loadTransactions() {
         alert("삭제 실패: " + (body.detail ?? response.status));
       }
     }));
+}
+
+function applyTxFilters() {
+  const from = el("tx-filter-from").value;
+  const to = el("tx-filter-to").value;
+  const type = el("tx-filter-type").value;
+  const text = el("tx-filter-text").value.trim().toLowerCase();
+
+  const filtered = allTransactions.filter((t) => {
+    if (from && t.trade_date < from) return false;
+    if (to && t.trade_date > to) return false;
+    if (type && t.type !== type) return false;
+    if (text && !(t.asset_id.toLowerCase().includes(text) || t.note.toLowerCase().includes(text))) {
+      return false;
+    }
+    return true;
+  });
+  renderTxTable(filtered);
+}
+
+["tx-filter-from", "tx-filter-to", "tx-filter-type"].forEach((id) =>
+  el(id).addEventListener("change", applyTxFilters));
+el("tx-filter-text").addEventListener("input", applyTxFilters);
+el("tx-filter-reset").addEventListener("click", () => {
+  el("tx-filter-from").value = "";
+  el("tx-filter-to").value = "";
+  el("tx-filter-type").value = "";
+  el("tx-filter-text").value = "";
+  applyTxFilters();
+});
+
+async function loadTransactions() {
+  const response = await fetch("/api/transactions");
+  if (!response.ok) return;
+  allTransactions = (await response.json()).transactions;
+  applyTxFilters();
 }
 
 // 폼 제출 중 버튼을 비활성화해 중복 클릭/느린 응답 중 재클릭으로 인한
@@ -754,6 +838,12 @@ guardSubmit(el("cash-reconcile-form"), async () => {
 });
 
 guardSubmit(el("holding-reconcile-form"), async () => {
+  const assetId = el("hr-asset").value;
+  const targetQty = el("hr-quantity").value;
+  if (!confirm(
+    `${assetId} 보유수량을 ${targetQty}주로 맞춘다 — 차액만큼 현재가로 매수/매도 거래가 ` +
+    "생성되어 평균단가·평가손익에 영향을 준다. 계속할까?"
+  )) return;
   const response = await fetch("/api/reconcile/holding", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -969,6 +1059,30 @@ guardSubmit(el("stock-target-form"), async () => {
   }
 });
 
+guardSubmit(el("fx-form"), async () => {
+  const response = await fetch("/api/fx", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      base: el("fx-base").value,
+      quote: "KRW",
+      rate: el("fx-rate").value,
+      rate_date: el("fx-date").value || null,
+    }),
+  });
+  const msg = el("fx-msg");
+  msg.className = "";
+  if (response.ok) {
+    el("fx-form").reset();
+    msg.textContent = "✅ 저장 완료 — 다시 계산 중…";
+    load();
+    loadAudit();
+  } else {
+    const body = await response.json().catch(() => ({}));
+    msg.textContent = "저장 실패: " + (body.detail ?? response.status);
+  }
+});
+
 guardSubmit(el("journal-form"), async () => {
   const response = await fetch("/api/journal", {
     method: "POST",
@@ -1007,18 +1121,36 @@ el("ai-run").addEventListener("click", async () => {
   }
 });
 
-async function loadAudit() {
-  const response = await fetch("/api/audit?limit=20");
-  if (!response.ok) return;
-  const { events } = await response.json();
-  if (events.length === 0) return;
-  el("audit-table").innerHTML = `
-    <thead><tr><th>시각</th><th>주체</th><th>행동</th><th>내용</th></tr></thead>
-    <tbody>${events.map((e) => `
-      <tr><td>${esc(e.occurred_at.slice(0, 19).replace("T", " "))}</td>
-      <td>${esc(e.actor)}</td><td>${esc(e.action)}</td><td>${esc(e.detail)}</td></tr>`).join("")}
-    </tbody>`;
+let auditEvents = [];
+let auditLimit = 20;
+
+function renderAuditTable() {
+  const text = el("audit-filter-text").value.trim().toLowerCase();
+  const filtered = text
+    ? auditEvents.filter((e) =>
+        e.action.toLowerCase().includes(text) || e.detail.toLowerCase().includes(text))
+    : auditEvents;
+  el("audit-table").innerHTML = filtered.length
+    ? `<thead><tr><th>시각</th><th>주체</th><th>행동</th><th>내용</th></tr></thead>
+       <tbody>${filtered.map((e) => `
+         <tr><td>${esc(e.occurred_at.slice(0, 19).replace("T", " "))}</td>
+         <td>${esc(e.actor)}</td><td>${esc(e.action)}</td><td>${esc(e.detail)}</td></tr>`).join("")}
+       </tbody>`
+    : '<tbody><tr><td class="empty">조건에 맞는 기록이 없다.</td></tr></tbody>';
 }
+
+async function loadAudit() {
+  const response = await fetch("/api/audit?limit=" + auditLimit);
+  if (!response.ok) return;
+  auditEvents = (await response.json()).events;
+  renderAuditTable();
+}
+
+el("audit-filter-text").addEventListener("input", renderAuditTable);
+el("audit-load-more").addEventListener("click", () => {
+  auditLimit += 50;
+  loadAudit();
+});
 
 load();
 loadTransactions();

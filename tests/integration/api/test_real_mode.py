@@ -679,6 +679,68 @@ class TestStockTargets:
         assert client.get("/api/stock-targets").status_code == 400
 
 
+class TestFxRate:
+    def _client(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        monkeypatch.setenv("PAMS_MODE", "real")
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            recorder.execute(as_of=day, base_currency=Currency.KRW)
+        service = real_dashboard_service(project_root)
+        return TestClient(
+            create_app(service, data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+
+    def test_save_creates_rate(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.post(
+            "/api/fx",
+            json={"base": "JPY", "quote": "KRW", "rate": "9.15", "rate_date": "2026-07-10"},
+        )
+        assert response.status_code == 201
+        fx_text = (project_root / "data" / "fx.csv").read_text(encoding="utf-8")
+        assert "JPY,KRW,2026-07-10,9.15" in fx_text
+
+    def test_save_upserts_same_date(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        client.post(
+            "/api/fx",
+            json={"base": "JPY", "quote": "KRW", "rate": "9.0", "rate_date": "2026-07-10"},
+        )
+        client.post(
+            "/api/fx",
+            json={"base": "JPY", "quote": "KRW", "rate": "9.2", "rate_date": "2026-07-10"},
+        )
+        fx_text = (project_root / "data" / "fx.csv").read_text(encoding="utf-8")
+        assert fx_text.count("JPY,KRW,2026-07-10") == 1
+        assert "9.2" in fx_text
+
+    def test_invalid_currency_rejected(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.post("/api/fx", json={"base": "XXX", "quote": "KRW", "rate": "9.0"})
+        assert response.status_code == 400
+
+    def test_negative_rate_rejected(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.post("/api/fx", json={"base": "JPY", "quote": "KRW", "rate": "-1"})
+        assert response.status_code == 400
+
+    def test_demo_mode_blocks_fx_entry(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PAMS_MODE", "demo")
+        client = TestClient(
+            create_app(data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+        response = client.post("/api/fx", json={"base": "JPY", "quote": "KRW", "rate": "9.0"})
+        assert response.status_code == 400
+
+
 class TestCli:
     def test_snapshot_command(self, project_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from pams.interfaces.cli.__main__ import main

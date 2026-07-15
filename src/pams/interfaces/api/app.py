@@ -52,7 +52,7 @@ from pams.interfaces.api.service import DashboardService
 from pams.journal.application import ListJournalEntries, RecordJournalEntry
 from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
-from pams.market_data.infrastructure import CsvPriceLookup, upsert_price_symbol
+from pams.market_data.infrastructure import CsvPriceLookup, upsert_fx_rate, upsert_price_symbol
 from pams.portfolio.domain import CashLedger, PositionLedger, Transaction, TransactionType
 from pams.portfolio.infrastructure import CsvDataError, CsvTransactionRepository
 from pams.shared_kernel.domain import (
@@ -136,6 +136,15 @@ class StockTargetRequest(BaseModel):
     target_percent: str
     buy_band: str
     sell_band: str
+
+
+class FxRequest(BaseModel):
+    """환율 수동 입력(1 base = rate × quote). fetch가 못 받아온 통화쌍을 채운다."""
+
+    base: str
+    quote: str
+    rate: str
+    rate_date: str | None = None
 
 
 class CashReconcileRequest(BaseModel):
@@ -860,6 +869,36 @@ def create_app(
             reason="웹 종목 목표비중 삭제",
         )
         return Response(status_code=204)
+
+    @app.post("/api/fx", status_code=201)
+    def save_fx_rate(request: FxRequest) -> dict[str, Any]:
+        _require_real_mode()
+        try:
+            base = Currency(request.base)
+            quote = Currency(request.quote)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="알 수 없는 통화") from None
+        try:
+            rate = Decimal(request.rate)
+        except InvalidOperation:
+            raise HTTPException(status_code=400, detail=f"잘못된 환율: {request.rate}") from None
+        if rate <= 0:
+            raise HTTPException(status_code=400, detail="환율은 양수여야 한다")
+        try:
+            rate_date = date.fromisoformat(request.rate_date) if request.rate_date else as_of()
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"잘못된 날짜: {request.rate_date}"
+            ) from None
+
+        upsert_fx_rate(storage_dir / "fx.csv", base, quote, rate_date, rate)
+        record_audit(
+            actor="user",
+            action="fx.saved",
+            detail=f"환율 입력: {base.value}/{quote.value} {rate_date.isoformat()} = {rate}",
+            reason="웹 환율 입력",
+        )
+        return {"base": base.value, "quote": quote.value, "rate_date": rate_date.isoformat()}
 
     @app.post("/api/analysis")
     def generate_analysis(request: AnalysisRequest) -> dict[str, str]:

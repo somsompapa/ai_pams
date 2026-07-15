@@ -26,7 +26,11 @@ from pydantic import BaseModel
 
 from pams.ai_analysis.application import GenerateAnalysis
 from pams.ai_analysis.domain import AnalysisKind, TextCompletion
-from pams.ai_analysis.infrastructure import AnthropicTextCompletion, GeminiTextCompletion
+from pams.ai_analysis.infrastructure import (
+    AnalysisProviderError,
+    AnthropicTextCompletion,
+    GeminiTextCompletion,
+)
 from pams.asset.infrastructure import (
     AssetConfigError,
     YamlAssetCatalog,
@@ -910,11 +914,14 @@ def create_app(
                 ),
             )
         data = dashboard_service.build(as_of=as_of(), base_currency=Currency.KRW)
-        narrative = GenerateAnalysis(completion=text_completion).execute(
-            kind=AnalysisKind(request.kind),
-            facts=_facts_from_dashboard(data),
-            note=request.note,
-        )
+        try:
+            narrative = GenerateAnalysis(completion=text_completion).execute(
+                kind=AnalysisKind(request.kind),
+                facts=_facts_from_dashboard(data),
+                note=request.note,
+            )
+        except AnalysisProviderError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
         record_audit(
             actor="user",
             action="analysis.generated",

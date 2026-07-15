@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from pams.ai_analysis.infrastructure import AnalysisProviderError
 from pams.interfaces.api.app import create_app
 
 JOURNAL_BODY = {
@@ -47,6 +48,11 @@ class TestJournalApi:
         assert "journal.recorded" in audit_log
 
 
+class FailingCompletion:
+    def complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        raise AnalysisProviderError("Gemini API 호출 실패: 401 Unauthorized")
+
+
 class TestAnalysisApi:
     def test_analysis_with_injected_completion(self, tmp_path: Path) -> None:
         client = TestClient(create_app(data_dir=tmp_path, completion=FakeCompletion()))
@@ -73,3 +79,14 @@ class TestAnalysisApi:
         client = TestClient(create_app(data_dir=tmp_path, completion=FakeCompletion()))
         response = client.post("/api/analysis", json={"kind": "fortune_telling"})
         assert response.status_code == 422
+
+    def test_provider_failure_returns_actionable_error_not_bare_500(self, tmp_path: Path) -> None:
+        """AI 공급자 호출이 실패하면(키 오류·네트워크 등) 원인이 담긴 502를 반환한다.
+
+        예전에는 AnalysisProviderError를 아무 데서도 잡지 않아 빈 500으로
+        새어나가, 사용자는 "실패(500)"만 보고 원인을 알 수 없었다.
+        """
+        client = TestClient(create_app(data_dir=tmp_path, completion=FailingCompletion()))
+        response = client.post("/api/analysis", json={"kind": "summary"})
+        assert response.status_code == 502
+        assert "401 Unauthorized" in response.json()["detail"]

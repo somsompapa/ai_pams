@@ -157,6 +157,7 @@ class DashboardService:
             "weights": self._weights(snapshot),
             "holdings": self._holdings(snapshot),
             "stocks": self._stocks(snapshot),
+            "stock_sleeve": self._stock_sleeve(snapshot),
             "stock_allocation": self._stock_allocation(snapshot, base_currency),
             "targets": self._targets(snapshot, policy),
             "risk": [
@@ -301,6 +302,49 @@ class DashboardService:
         }
 
     @staticmethod
+    def _stock_sleeve(snapshot: PortfolioSnapshot) -> list[dict[str, str]]:
+        """주식(국내주식·미국주식·ETF) 전체 대비 국내/해외 구성.
+
+        국가는 자산 마스터의 country(KR 기준)로 나눈다 - ETF도 국내/해외가 갈리므로
+        asset_class만으로는 구분할 수 없다.
+        """
+        equities = [
+            v
+            for v in snapshot.valuations
+            if v.asset.asset_class.is_equity_like and v.market_value_base.is_positive
+        ]
+        if not equities:
+            return []
+        base_currency = snapshot.base_currency
+        total = sum((v.market_value_base.amount for v in equities), Decimal(0))
+        domestic = sum(
+            (v.market_value_base.amount for v in equities if v.asset.country == "KR"),
+            Decimal(0),
+        )
+        foreign = total - domestic
+
+        def pct(amount: Decimal) -> str:
+            return percent_value(amount / total) if total > 0 else "0.00"
+
+        return [
+            {
+                "label": "주식전체",
+                "value": format_money(Money(total, base_currency)),
+                "percent": pct(total),
+            },
+            {
+                "label": "국내주식",
+                "value": format_money(Money(domestic, base_currency)),
+                "percent": pct(domestic),
+            },
+            {
+                "label": "해외주식",
+                "value": format_money(Money(foreign, base_currency)),
+                "percent": pct(foreign),
+            },
+        ]
+
+    @staticmethod
     def _holdings(snapshot: PortfolioSnapshot) -> list[dict[str, Any]]:
         """종목별 상세: 수량·평단가·현재가·평가금액·평가손익·비중.
 
@@ -355,6 +399,7 @@ class DashboardService:
                 plan = None
 
         total = snapshot.total_value.amount
+        sleeve_total = sum((v.market_value_base.amount for v in equities), Decimal(0))
         rows: list[dict[str, Any]] = []
         for v in equities:
             quantity = v.position.quantity.value
@@ -393,6 +438,11 @@ class DashboardService:
                     "unrealized_positive": v.unrealized_pnl_base.amount >= 0,
                     "weight": percent_value(
                         v.market_value_base.amount / total if total > 0 else Decimal(0)
+                    ),
+                    "sleeve_weight": percent_value(
+                        v.market_value_base.amount / sleeve_total
+                        if sleeve_total > 0
+                        else Decimal(0)
                     ),
                     "buy_trigger": buy_at,
                     "take_profit": take_profit,

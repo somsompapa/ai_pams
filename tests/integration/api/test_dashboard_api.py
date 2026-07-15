@@ -99,6 +99,25 @@ class TestDashboardApi:
         assert "KRX:005930" in ids
         assert "KRX:114260" not in ids  # 채권은 주식 슬리브가 아니다
 
+    def test_stocks_expose_sleeve_weight(self, client: TestClient) -> None:
+        data = client.get("/api/dashboard").json()
+        stocks = data["stocks"]
+        assert stocks
+        sample = stocks[0]
+        assert "weight" in sample and "sleeve_weight" in sample
+        # 슬리브 비중은 주식 종목끼리만 합쳐 100%가 되어야 한다
+        total = sum(Decimal(s["sleeve_weight"]) for s in stocks)
+        assert Decimal("99.9") <= total <= Decimal("100.1")
+
+    def test_stock_sleeve_breakdown(self, client: TestClient) -> None:
+        data = client.get("/api/dashboard").json()
+        sleeve = data["stock_sleeve"]
+        labels = {row["label"] for row in sleeve}
+        assert labels == {"주식전체", "국내주식", "해외주식"}
+        total_row = next(r for r in sleeve if r["label"] == "주식전체")
+        assert total_row["percent"] == "100.00"
+        assert total_row["value"].endswith("KRW")
+
     def test_holdings_expose_per_position_detail(self, client: TestClient) -> None:
         data = client.get("/api/dashboard").json()
         holdings = data["holdings"]

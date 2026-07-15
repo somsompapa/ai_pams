@@ -478,7 +478,7 @@ function renderStocksTable() {
     ? `<thead><tr>
          <th>종목</th><th class="num">수량</th><th class="num">평단가</th><th class="num">현재가</th>
          <th class="num">평가손익</th><th class="num">매수선↓</th><th class="num">익절선↑</th><th class="num">손절선↓</th><th>신호</th>
-         <th class="num">비중</th><th class="num">현재비중(주식내)</th><th></th><th></th>
+         <th class="num">비중</th><th></th><th></th>
        </tr></thead>
        <tbody>${stocks.map((s, idx) => `
          <tr>
@@ -491,7 +491,6 @@ function renderStocksTable() {
            <td class="num">${esc(s.take_profit)}</td>
            <td class="num">${esc(s.stop_loss)}</td>
            <td><span class="badge ${{buy:"buy",sell:"sell",hold:"hold",none:"hold"}[s.signal] || "hold"}">${esc(s.signal_label)}</span></td>
-           <td class="num">${esc(s.weight)}%</td>
            <td class="num">${esc(s.sleeve_weight)}%</td>
            <td class="reorder-cell">
              <button type="button" class="stock-move" data-id="${esc(s.asset_id)}" data-dir="-1" ${idx === 0 ? "disabled" : ""}>↑</button>

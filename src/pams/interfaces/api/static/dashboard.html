@@ -117,6 +117,12 @@
     background: var(--bg); color: var(--text); font-size: 0.85rem; width: auto;
   }
   .tx-filters input#tx-filter-text { width: 10rem; }
+  .reorder-cell { white-space: nowrap; }
+  .stock-move {
+    padding: 0.2rem 0.5rem; border: 1px solid var(--line); border-radius: 0.4rem;
+    background: var(--card); color: var(--text); cursor: pointer; font-size: 0.8rem;
+  }
+  .stock-move:disabled { opacity: 0.3; cursor: default; }
   .tx-filters button {
     padding: 0.4rem 0.9rem; border: 1px solid var(--line); border-radius: 0.5rem;
     background: var(--card); color: var(--text); cursor: pointer; font-size: 0.85rem;
@@ -126,7 +132,7 @@
   .sub-form .tx-form { margin-top: 0.5rem; }
   th { color: var(--muted); font-weight: 600; }
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: 0.6rem; }
-  .metric { border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.5rem 0.7rem; }
+  .metric { border: 1px solid var(--line); border-radius: 0.6rem; padding: 0.5rem 0.7rem; cursor: help; }
   .metric .label { color: var(--muted); font-size: 0.75rem; }
   .metric .value { font-weight: 700; margin-top: 0.1rem; }
   .alert { display: flex; gap: 0.6rem; align-items: baseline; padding: 0.45rem 0; border-bottom: 1px solid var(--line); font-size: 0.85rem; }
@@ -192,8 +198,6 @@
     <p id="stocks-note" class="empty"></p>
   </section>
   <section class="card" data-tab="portfolio"><h2>자산군 비중</h2><div id="w-asset"></div></section>
-  <section class="card" data-tab="portfolio"><h2>목표비중 대비 (허용밴드 ±)</h2><div id="targets"></div></section>
-  <section class="card" data-tab="portfolio"><h2>국가 비중</h2><div id="w-country"></div></section>
   <section class="card" data-tab="portfolio"><h2>통화 비중</h2><div id="w-currency"></div></section>
   <section class="card" data-tab="portfolio"><h2>주식 비중 (국내·해외)</h2><div id="w-stock-sleeve"></div></section>
 
@@ -396,7 +400,8 @@
   <section class="card wide" data-tab="journal">
     <h2>감사 로그 (최근 활동)</h2>
     <div class="tx-filters">
-      <input id="audit-filter-text" placeholder="행동/내용 검색">
+      <label><input type="checkbox" id="audit-today-only" checked> 오늘만</label>
+      <input id="audit-filter-text" placeholder="행동/내용 검색 (전체 기간)">
       <button type="button" id="audit-load-more">더 보기</button>
     </div>
     <table id="audit-table"><tbody><tr><td class="empty">기록이 없다.</td></tr></tbody></table>
@@ -434,10 +439,94 @@ function bars(entries) {
   }).join("");
 }
 
+// 주식 종목 표의 사용자 지정 순서 (브라우저별 localStorage - 서버/도메인 데이터가 아니다)
+let lastStocks = [];
+const STOCK_ORDER_KEY = "pams-stock-order";
+
+function loadStockOrder() {
+  try {
+    return JSON.parse(localStorage.getItem(STOCK_ORDER_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function orderedStocks(stocks) {
+  const order = loadStockOrder();
+  const byId = new Map(stocks.map((s) => [s.asset_id, s]));
+  const known = order.map((id) => byId.get(id)).filter(Boolean);
+  const rest = stocks.filter((s) => !order.includes(s.asset_id));
+  return [...known, ...rest];
+}
+
+function moveStock(assetId, direction) {
+  const ids = orderedStocks(lastStocks).map((s) => s.asset_id);
+  const idx = ids.indexOf(assetId);
+  const target = idx + direction;
+  if (target < 0 || target >= ids.length) return;
+  [ids[idx], ids[target]] = [ids[target], ids[idx]];
+  localStorage.setItem(STOCK_ORDER_KEY, JSON.stringify(ids));
+  renderStocksTable();
+}
+
+function renderStocksTable() {
+  const stocks = orderedStocks(lastStocks);
+  el("stocks-note").textContent = stocks.some((s) => s.signal === "none")
+    ? "※ 일부 종목은 가격 트리거 미설정 상태다. config/triggers로 매수/매도 가격선을 정하면 신호가 활성화된다."
+    : "";
+  el("stocks-table").innerHTML = stocks.length
+    ? `<thead><tr>
+         <th>종목</th><th class="num">수량</th><th class="num">평단가</th><th class="num">현재가</th>
+         <th class="num">평가손익</th><th class="num">매수선↓</th><th class="num">익절선↑</th><th class="num">손절선↓</th><th>신호</th>
+         <th class="num">비중</th><th class="num">현재비중(주식내)</th><th></th><th></th>
+       </tr></thead>
+       <tbody>${stocks.map((s, idx) => `
+         <tr>
+           <td><strong>${esc(s.name)}</strong><br><span class="empty">${esc(s.asset_id)}</span></td>
+           <td class="num">${esc(s.quantity)}</td>
+           <td class="num">${esc(s.avg_price)}</td>
+           <td class="num">${esc(s.current_price)}</td>
+           <td class="num ${s.unrealized_positive ? "pnl-up" : "pnl-down"}">${esc(s.unrealized_pnl)} (${esc(s.unrealized_percent)})</td>
+           <td class="num">${esc(s.buy_trigger)}</td>
+           <td class="num">${esc(s.take_profit)}</td>
+           <td class="num">${esc(s.stop_loss)}</td>
+           <td><span class="badge ${{buy:"buy",sell:"sell",hold:"hold",none:"hold"}[s.signal] || "hold"}">${esc(s.signal_label)}</span></td>
+           <td class="num">${esc(s.weight)}%</td>
+           <td class="num">${esc(s.sleeve_weight)}%</td>
+           <td class="reorder-cell">
+             <button type="button" class="stock-move" data-id="${esc(s.asset_id)}" data-dir="-1" ${idx === 0 ? "disabled" : ""}>↑</button>
+             <button type="button" class="stock-move" data-id="${esc(s.asset_id)}" data-dir="1" ${idx === stocks.length - 1 ? "disabled" : ""}>↓</button>
+           </td>
+           <td>${s.signal !== "none" ? `<button type="button" class="trigger-delete" data-id="${esc(s.asset_id)}">트리거 삭제</button>` : ""}</td>
+         </tr>`).join("")}</tbody>`
+    : '<tbody><tr><td class="empty">보유 주식 종목이 없다.</td></tr></tbody>';
+
+  el("stocks-table").querySelectorAll(".stock-move").forEach((btn) =>
+    btn.addEventListener("click", () => moveStock(btn.dataset.id, Number(btn.dataset.dir))));
+
+  el("stocks-table").querySelectorAll(".trigger-delete").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      if (!confirm(btn.dataset.id + "의 가격 트리거를 삭제할까?")) return;
+      const response = await fetch("/api/triggers/" + encodeURIComponent(btn.dataset.id), {
+        method: "DELETE",
+      });
+      if (response.ok) {
+        load();
+        loadAudit();
+      } else {
+        const body = await response.json().catch(() => ({}));
+        alert("삭제 실패: " + (body.detail ?? response.status));
+      }
+    }));
+}
+
+let currentAsOf = null;
+
 async function load() {
   const response = await fetch("/api/dashboard");
   if (!response.ok) { el("meta").textContent = "데이터를 불러오지 못했다 (" + response.status + ")"; return; }
   const d = await response.json();
+  currentAsOf = d.as_of;
 
   el("meta").textContent = `${d.policy_name} · 기준일 ${d.as_of} · 기준통화 ${d.base_currency}`;
   el("total-value").textContent = d.summary.total_value;
@@ -455,18 +544,7 @@ async function load() {
     : `<span class="badge bad">위반 ${d.summary.violation_count}건</span>`;
 
   el("w-asset").innerHTML = bars(d.weights.asset_class);
-  el("w-country").innerHTML = bars(d.weights.country);
   el("w-currency").innerHTML = bars(d.weights.currency);
-
-  el("targets").innerHTML = d.targets.map((t) => {
-    const statusLabel = {ok: "밴드 내", over: "초과", under: "미달"}[t.status];
-    return `
-    <div class="target-row">
-      <span>${esc(t.label)}</span>
-      <div class="bar"><i style="width:${Math.min(parseFloat(t.current), 100)}%"></i></div>
-      <span class="status-${t.status}">${esc(t.current)}% / ${esc(t.target)}% ±${esc(t.band)} (${statusLabel})</span>
-    </div>`;
-  }).join("");
 
   const sigBadge = { buy: '<span class="badge buy">매수</span>', sell: '<span class="badge sell">매도</span>', hold: '<span class="badge hold">유지</span>', none: '<span class="badge hold">미설정</span>' };
 
@@ -482,47 +560,8 @@ async function load() {
       </div>`).join("")
     : '<p class="empty">오늘은 발동한 매수/매도 신호가 없다. (가격 트리거·리밸런싱 모두 조건 미충족)</p>';
 
-  const stocks = d.stocks || [];
-  el("stocks-note").textContent = stocks.some((s) => s.signal === "none")
-    ? "※ 일부 종목은 가격 트리거 미설정 상태다. config/triggers로 매수/매도 가격선을 정하면 신호가 활성화된다."
-    : "";
-  el("stocks-table").innerHTML = stocks.length
-    ? `<thead><tr>
-         <th>종목</th><th class="num">수량</th><th class="num">평단가</th><th class="num">현재가</th>
-         <th class="num">평가손익</th><th class="num">매수선↓</th><th class="num">익절선↑</th><th class="num">손절선↓</th><th>신호</th>
-         <th class="num">비중</th><th class="num">현재비중(주식내)</th><th></th>
-       </tr></thead>
-       <tbody>${stocks.map((s) => `
-         <tr>
-           <td><strong>${esc(s.name)}</strong><br><span class="empty">${esc(s.asset_id)}</span></td>
-           <td class="num">${esc(s.quantity)}</td>
-           <td class="num">${esc(s.avg_price)}</td>
-           <td class="num">${esc(s.current_price)}</td>
-           <td class="num ${s.unrealized_positive ? "pnl-up" : "pnl-down"}">${esc(s.unrealized_pnl)} (${esc(s.unrealized_percent)})</td>
-           <td class="num">${esc(s.buy_trigger)}</td>
-           <td class="num">${esc(s.take_profit)}</td>
-           <td class="num">${esc(s.stop_loss)}</td>
-           <td><span class="badge ${{buy:"buy",sell:"sell",hold:"hold",none:"hold"}[s.signal] || "hold"}">${esc(s.signal_label)}</span></td>
-           <td class="num">${esc(s.weight)}%</td>
-           <td class="num">${esc(s.sleeve_weight)}%</td>
-           <td>${s.signal !== "none" ? `<button type="button" class="trigger-delete" data-id="${esc(s.asset_id)}">트리거 삭제</button>` : ""}</td>
-         </tr>`).join("")}</tbody>`
-    : '<tbody><tr><td class="empty">보유 주식 종목이 없다.</td></tr></tbody>';
-
-  el("stocks-table").querySelectorAll(".trigger-delete").forEach((btn) =>
-    btn.addEventListener("click", async () => {
-      if (!confirm(btn.dataset.id + "의 가격 트리거를 삭제할까?")) return;
-      const response = await fetch("/api/triggers/" + encodeURIComponent(btn.dataset.id), {
-        method: "DELETE",
-      });
-      if (response.ok) {
-        load();
-        loadAudit();
-      } else {
-        const body = await response.json().catch(() => ({}));
-        alert("삭제 실패: " + (body.detail ?? response.status));
-      }
-    }));
+  lastStocks = d.stocks || [];
+  renderStocksTable();
 
   const assetOpts = (d.holdings || []).map((h) => `<option value="${esc(h.asset_id)}">${esc(h.name)}</option>`);
   el("asset-options").innerHTML = assetOpts.join("");
@@ -530,7 +569,9 @@ async function load() {
   el("w-stock-sleeve").innerHTML = bars(d.stock_sleeve || []);
 
   el("risk").innerHTML = d.risk.map((m) => `
-    <div class="metric"><div class="label">${esc(m.label)}</div><div class="value">${esc(m.value)}</div></div>`).join("");
+    <div class="metric" title="${esc(m.description || "")}">
+      <div class="label">${esc(m.label)}</div><div class="value">${esc(m.value)}</div>
+    </div>`).join("");
 
   el("alerts").innerHTML = d.alerts.length === 0
     ? '<p class="empty">발동한 규칙이 없다.</p>'
@@ -638,7 +679,7 @@ function renderTxTable(transactions) {
              <button type="button" class="tx-delete" data-id="${esc(t.transaction_id)}">삭제</button>
            </td>
          </tr>`).join("")}</tbody>`
-    : '<tbody><tr><td class="empty">조건에 맞는 거래 내역이 없다.</td></tr></tbody>';
+    : '<tbody><tr><td class="empty">조건에 맞는 거래 내역이 없다. (기본은 오늘 거래만 - 기간을 넓히거나 초기화해보라)</td></tr></tbody>';
 
   el("tx-table").querySelectorAll(".tx-edit").forEach((btn) =>
     btn.addEventListener("click", () => {
@@ -705,10 +746,19 @@ el("tx-filter-reset").addEventListener("click", () => {
   applyTxFilters();
 });
 
+let txFiltersInitialized = false;
+
 async function loadTransactions() {
   const response = await fetch("/api/transactions");
   if (!response.ok) return;
   allTransactions = (await response.json()).transactions;
+  if (!txFiltersInitialized) {
+    txFiltersInitialized = true;
+    const today = currentAsOf || new Date().toISOString().slice(0, 10);
+    el("tx-filter-from").value = today;
+    el("tx-filter-to").value = today;
+    el("tx-list-msg").textContent = "기본은 오늘 거래만 보여준다 - 과거 내역은 기간을 넓히거나 검색으로 찾는다.";
+  }
   applyTxFilters();
 }
 
@@ -1055,17 +1105,24 @@ let auditLimit = 20;
 
 function renderAuditTable() {
   const text = el("audit-filter-text").value.trim().toLowerCase();
-  const filtered = text
-    ? auditEvents.filter((e) =>
-        e.action.toLowerCase().includes(text) || e.detail.toLowerCase().includes(text))
-    : auditEvents;
+  const todayOnly = el("audit-today-only").checked;
+  const today = currentAsOf || new Date().toISOString().slice(0, 10);
+
+  let filtered = auditEvents;
+  if (text) {
+    filtered = filtered.filter((e) =>
+      e.action.toLowerCase().includes(text) || e.detail.toLowerCase().includes(text));
+  } else if (todayOnly) {
+    filtered = filtered.filter((e) => e.occurred_at.slice(0, 10) === today);
+  }
+
   el("audit-table").innerHTML = filtered.length
     ? `<thead><tr><th>시각</th><th>주체</th><th>행동</th><th>내용</th></tr></thead>
        <tbody>${filtered.map((e) => `
          <tr><td>${esc(e.occurred_at.slice(0, 19).replace("T", " "))}</td>
          <td>${esc(e.actor)}</td><td>${esc(e.action)}</td><td>${esc(e.detail)}</td></tr>`).join("")}
        </tbody>`
-    : '<tbody><tr><td class="empty">조건에 맞는 기록이 없다.</td></tr></tbody>';
+    : '<tbody><tr><td class="empty">조건에 맞는 기록이 없다. ("오늘만" 체크를 해제하거나 검색해보라)</td></tr></tbody>';
 }
 
 async function loadAudit() {
@@ -1075,17 +1132,36 @@ async function loadAudit() {
   renderAuditTable();
 }
 
-el("audit-filter-text").addEventListener("input", renderAuditTable);
+function ensureFullAuditLoaded() {
+  if (auditLimit < 500) {
+    auditLimit = 500;
+    loadAudit();
+  } else {
+    renderAuditTable();
+  }
+}
+
+el("audit-filter-text").addEventListener("input", () => {
+  if (el("audit-filter-text").value.trim()) ensureFullAuditLoaded();
+  else renderAuditTable();
+});
+el("audit-today-only").addEventListener("change", () => {
+  if (!el("audit-today-only").checked) ensureFullAuditLoaded();
+  else renderAuditTable();
+});
 el("audit-load-more").addEventListener("click", () => {
   auditLimit += 50;
   loadAudit();
 });
 
-load();
-loadTransactions();
-loadAssets();
-loadJournal();
-loadAudit();
+(async () => {
+  // currentAsOf(오늘 날짜 필터 기본값)를 거래내역/감사로그가 쓰기 전에 확정한다.
+  await load();
+  await loadTransactions();
+  loadAssets();
+  loadJournal();
+  await loadAudit();
+})();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
 </script>
 </body>

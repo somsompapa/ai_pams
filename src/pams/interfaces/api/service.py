@@ -47,6 +47,7 @@ from pams.reporting.application.formatting import (
     format_money,
     format_number,
     format_percent,
+    metric_description,
     metric_label,
     percent_value,
 )
@@ -161,7 +162,12 @@ class DashboardService:
             "stock_allocation": self._stock_allocation(snapshot, base_currency),
             "targets": self._targets(snapshot, policy),
             "risk": [
-                {"name": name, "label": metric_label(name), "value": format_metric(name, value)}
+                {
+                    "name": name,
+                    "label": metric_label(name),
+                    "value": format_metric(name, value),
+                    "description": metric_description(name),
+                }
                 for name, value in risk.metrics.items()
             ],
             "alerts": self._alerts(compliance),

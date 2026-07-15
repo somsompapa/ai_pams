@@ -171,6 +171,10 @@ class TestDashboardApi:
         names = {metric["name"] for metric in data["risk"]}
         assert {"mdd", "drawdown", "sharpe", "var", "beta", "concentration_hhi"} <= names
 
+    def test_risk_metrics_carry_hover_description(self, client: TestClient) -> None:
+        data = client.get("/api/dashboard").json()
+        assert all(metric["description"] for metric in data["risk"])
+
     def test_monthly_performance_rows(self, client: TestClient) -> None:
         data = client.get("/api/dashboard").json()
         monthly = data["performance"]["monthly"]

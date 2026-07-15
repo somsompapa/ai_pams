@@ -40,6 +40,23 @@ METRIC_LABELS: dict[str, str] = {
     "concentration_hhi": "집중도(HHI)",
 }
 
+METRIC_DESCRIPTIONS: dict[str, str] = {
+    "mdd": "역사적 고점 대비 가장 크게 떨어졌던 비율 - 최악의 경우 얼마나 잃었는지",
+    "drawdown": "지금 시점 고점 대비 얼마나 내려와 있는지",
+    "cagr": "연평균 복리 성장률",
+    "volatility": "수익률이 얼마나 들쭉날쭉한지(연환산 표준편차) - 높을수록 변동이 크다",
+    "sharpe": "위험(변동성) 대비 초과수익 - 높을수록 위험 대비 수익이 좋다",
+    "sortino": "하락 변동성만 위험으로 보는 위험조정 수익률 - 상승 변동은 위험으로 치지 않는다",
+    "calmar": "연수익률 ÷ 최대낙폭 - 낙폭 대비 수익성",
+    "var": "정해진 신뢰수준에서 예상되는 최대 손실률(Value at Risk)",
+    "cvar": "VaR를 넘는 손실이 났을 때의 평균 손실률(Conditional VaR)",
+    "beta": "벤치마크 대비 민감도 - 1보다 크면 벤치마크보다 더 크게 움직인다",
+    "alpha": "벤치마크 대비 초과수익률",
+    "correlation": "벤치마크와 얼마나 같이 움직이는지(-1~1)",
+    "tracking_error": "벤치마크 대비 수익률이 얼마나 벌어지는지 - 낮을수록 벤치마크를 잘 따라간다",
+    "concentration_hhi": "허핀달-허쉬만 지수 - 특정 종목·자산에 쏠려 있을수록 높다",
+}
+
 # 백분율로 표시하는 리스크 지표 (나머지는 소수 그대로)
 RATIO_METRICS: frozenset[str] = frozenset(
     {"mdd", "drawdown", "cagr", "volatility", "var", "cvar", "alpha", "tracking_error"}
@@ -74,3 +91,7 @@ def format_metric(name: str, value: Decimal) -> str:
 
 def metric_label(name: str) -> str:
     return METRIC_LABELS.get(name, name)
+
+
+def metric_description(name: str) -> str:
+    return METRIC_DESCRIPTIONS.get(name, "")

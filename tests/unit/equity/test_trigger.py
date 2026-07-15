@@ -7,6 +7,8 @@
 현재가가 선을 건드리면 신호를 낸다. 실행은 사용자가 한다.
 """
 
+from decimal import Decimal
+
 import pytest
 
 from pams.equity.domain import (
@@ -14,6 +16,7 @@ from pams.equity.domain import (
     PriceTrigger,
     PriceTriggerPlan,
     StockSignal,
+    band_trigger,
 )
 from pams.shared_kernel.domain import Currency, DomainValidationError, Money
 
@@ -87,6 +90,51 @@ class TestPriceTrigger:
     def test_currency_mismatch_rejected(self) -> None:
         with pytest.raises(DomainValidationError):
             PriceTrigger("X", buy_at=krw("100"), take_profit_at=Money.of("200", Currency.USD))
+
+
+class TestBandTrigger:
+    """평단가/현재가 대비 비율로 트리거 3선을 기계적으로 계산한다.
+
+    비율(%)은 사용자가 정하는 IPS 값이고, 계산은 데이터(평단가/현재가)에
+    적용할 뿐이다 - '어느 종목이 얼마나 오를지'는 어디에도 판단하지 않는다.
+    """
+
+    def test_computes_lines_from_percentages(self) -> None:
+        t = band_trigger(
+            asset_id="KRX:005930",
+            avg_price=krw("100000"),
+            current_price=krw("105000"),
+            stop_loss_percent=Decimal("20"),
+            take_profit_percent=Decimal("20"),
+            buy_dip_percent=Decimal("10"),
+        )
+        assert t.stop_loss_at == krw("80000")
+        assert t.take_profit_at == krw("120000")
+        assert t.buy_at == krw("94500")
+
+    def test_raises_when_buy_and_stop_loss_collide(self) -> None:
+        # 현재가 == 평단가이고 매수%==손절%이면 매수선이 손절선과 같아져 순서 검증에 걸린다.
+        with pytest.raises(DomainValidationError):
+            band_trigger(
+                asset_id="X",
+                avg_price=krw("100000"),
+                current_price=krw("100000"),
+                stop_loss_percent=Decimal("20"),
+                take_profit_percent=Decimal("20"),
+                buy_dip_percent=Decimal("20"),
+            )
+
+    def test_raises_when_large_gain_pushes_buy_above_take_profit(self) -> None:
+        # 현재가가 평단가 대비 크게 올라 매수선이 익절선을 넘어서는 경우.
+        with pytest.raises(DomainValidationError):
+            band_trigger(
+                asset_id="X",
+                avg_price=krw("100000"),
+                current_price=krw("200000"),
+                stop_loss_percent=Decimal("20"),
+                take_profit_percent=Decimal("20"),
+                buy_dip_percent=Decimal("20"),
+            )
 
 
 class TestEvaluatePriceTriggers:

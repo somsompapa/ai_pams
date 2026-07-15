@@ -31,7 +31,7 @@ from pams.asset.infrastructure import AssetConfigError, append_asset
 from pams.audit.application import RecordAuditEvent
 from pams.audit.domain import AuditEvent
 from pams.audit.infrastructure import JsonlAuditTrail
-from pams.equity.domain import PriceTrigger
+from pams.equity.domain import PriceTrigger, band_trigger
 from pams.equity.infrastructure import save_price_trigger
 from pams.interfaces.api import demo
 from pams.interfaces.api.service import DashboardService
@@ -104,6 +104,14 @@ class TriggerRequest(BaseModel):
     buy_at: str | None = None
     take_profit_at: str | None = None
     stop_loss_at: str | None = None
+
+
+class BulkTriggerRequest(BaseModel):
+    """평단가/현재가 대비 비율로 보유 종목 전체의 트리거를 일괄 계산·저장한다."""
+
+    stop_loss_percent: str
+    take_profit_percent: str
+    buy_dip_percent: str
 
 
 class CashReconcileRequest(BaseModel):
@@ -616,6 +624,74 @@ def create_app(
             reason="웹 트리거 설정",
         )
         return {"asset_id": trigger.asset_id}
+
+    @app.post("/api/triggers/bulk", status_code=201)
+    def bulk_save_triggers(request: BulkTriggerRequest) -> dict[str, Any]:
+        """평단가/현재가 대비 비율(%)로 보유 종목 전체의 트리거를 일괄 계산·저장한다.
+
+        비율은 사용자가 정하고, 계산은 band_trigger(도메인)가 기계적으로 한다.
+        결과가 논리적 순서(손절<매수<익절)를 어기는 종목은 저장하지 않고 건너뛴다.
+        """
+        _require_real_mode()
+        try:
+            stop_loss_percent = Decimal(request.stop_loss_percent)
+            take_profit_percent = Decimal(request.take_profit_percent)
+            buy_dip_percent = Decimal(request.buy_dip_percent)
+        except InvalidOperation:
+            raise HTTPException(status_code=400, detail="비율은 숫자여야 한다") from None
+
+        outputs = dashboard_service.compute(as_of=as_of(), base_currency=Currency.KRW)
+        equities = [v for v in outputs.snapshot.valuations if v.asset.asset_class.is_equity_like]
+        trigger_path = dashboard_service.config_dir / "triggers" / "default.yaml"
+
+        applied: list[dict[str, str]] = []
+        skipped: list[dict[str, str]] = []
+        for v in equities:
+            quantity = v.position.quantity.value
+            if quantity == 0:
+                continue
+            avg_price = Money(
+                v.position.cost_basis.amount / quantity, v.position.cost_basis.currency
+            )
+            try:
+                trigger = band_trigger(
+                    asset_id=v.asset.asset_id,
+                    avg_price=avg_price,
+                    current_price=v.price,
+                    stop_loss_percent=stop_loss_percent,
+                    take_profit_percent=take_profit_percent,
+                    buy_dip_percent=buy_dip_percent,
+                )
+            except DomainError as error:
+                skipped.append(
+                    {"asset_id": v.asset.asset_id, "name": v.asset.name, "reason": str(error)}
+                )
+                continue
+            save_price_trigger(trigger_path, trigger)
+            assert trigger.buy_at is not None
+            assert trigger.take_profit_at is not None
+            assert trigger.stop_loss_at is not None
+            applied.append(
+                {
+                    "asset_id": v.asset.asset_id,
+                    "name": v.asset.name,
+                    "buy_at": str(trigger.buy_at.amount),
+                    "take_profit_at": str(trigger.take_profit_at.amount),
+                    "stop_loss_at": str(trigger.stop_loss_at.amount),
+                }
+            )
+
+        if applied:
+            record_audit(
+                actor="user",
+                action="trigger.bulk_saved",
+                detail=(
+                    f"트리거 일괄 설정(손절{stop_loss_percent}%/익절{take_profit_percent}%/"
+                    f"매수{buy_dip_percent}%): {len(applied)}건 적용, {len(skipped)}건 건너뜀"
+                ),
+                reason="웹 트리거 일괄 설정",
+            )
+        return {"applied": applied, "skipped": skipped}
 
     @app.post("/api/analysis")
     def generate_analysis(request: AnalysisRequest) -> dict[str, str]:

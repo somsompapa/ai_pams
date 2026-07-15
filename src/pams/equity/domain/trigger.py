@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 
 from pams.equity.domain.allocation import StockSignal
 from pams.shared_kernel.domain import DomainValidationError, Money
@@ -90,6 +91,43 @@ class PriceTrigger:
     def signal(self, current_price: Money) -> StockSignal:
         hit = self.evaluate(current_price)
         return hit.signal if hit is not None else StockSignal.HOLD
+
+
+def band_trigger(
+    *,
+    asset_id: str,
+    avg_price: Money,
+    current_price: Money,
+    stop_loss_percent: Decimal,
+    take_profit_percent: Decimal,
+    buy_dip_percent: Decimal,
+) -> PriceTrigger:
+    """평단가/현재가 대비 비율로 매수선·익절선·손절선을 기계적으로 계산한다.
+
+    손절선 = 평단가 × (1 − stop_loss_percent/100)
+    익절선 = 평단가 × (1 + take_profit_percent/100)
+    매수선 = 현재가 × (1 − buy_dip_percent/100)
+
+    비율은 사용자가 IPS 차원에서 정하는 값이고, 여기서는 그 규칙을 데이터에
+    적용할 뿐이다. 결과가 논리적 순서(손절 < 매수 < 익절)를 어기면 PriceTrigger
+    생성 시점에 DomainValidationError로 실패한다 - 그런 종목은 건너뛰어야 한다.
+    """
+    hundred = Decimal(100)
+    return PriceTrigger(
+        asset_id=asset_id,
+        buy_at=Money(
+            current_price.amount * (hundred - buy_dip_percent) / hundred,
+            current_price.currency,
+        ),
+        take_profit_at=Money(
+            avg_price.amount * (hundred + take_profit_percent) / hundred,
+            avg_price.currency,
+        ),
+        stop_loss_at=Money(
+            avg_price.amount * (hundred - stop_loss_percent) / hundred,
+            avg_price.currency,
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)

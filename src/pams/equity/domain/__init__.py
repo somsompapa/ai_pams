@@ -14,6 +14,7 @@ from pams.equity.domain.trigger import (
     PriceTriggerPlan,
     PriceTriggerReport,
     PriceTriggerRow,
+    band_trigger,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "StockSignal",
     "StockTarget",
     "StockTargetPlan",
+    "band_trigger",
 ]

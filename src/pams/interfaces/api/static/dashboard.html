@@ -253,6 +253,17 @@
       <p id="tg-msg" class="empty">매수선↓ 매수 · 익절선↑ 매도 · 손절선↓ 매도. 현재가가 선을 건드리면 '오늘의 액션'에 신호가 뜬다. (순서: 손절 &lt; 매수 &lt; 익절)</p>
     </details>
     <details class="sub-form">
+      <summary>＋ 비율 기준 트리거 일괄 설정 (보유 종목 전체)</summary>
+      <form id="bulk-trigger-form" class="tx-form">
+        <input id="bt-sl" placeholder="손절선(평단가 대비 -%)" inputmode="decimal" value="20" required>
+        <input id="bt-tp" placeholder="익절선(평단가 대비 +%)" inputmode="decimal" value="20" required>
+        <input id="bt-buy" placeholder="매수선(현재가 대비 -%)" inputmode="decimal" value="20" required>
+        <button type="submit">전체 종목에 적용</button>
+      </form>
+      <p id="bt-msg" class="empty">손절선 = 평단가×(1−%), 익절선 = 평단가×(1+%), 매수선 = 현재가×(1−%). 이미 평단가 대비 크게 벗어나 순서(손절&lt;매수&lt;익절)가 깨지는 종목은 건너뛰고 아래에 표시한다.</p>
+      <div id="bt-result"></div>
+    </details>
+    <details class="sub-form">
       <summary>＋ 새 종목 추가</summary>
       <form id="asset-form" class="tx-form">
         <input id="as-id" placeholder="종목코드 (예: NASDAQ:NVDA)" required>
@@ -718,6 +729,40 @@ guardSubmit(el("trigger-form"), async () => {
     stop_loss_at: el("tg-sl").value || null,
   }, "tg-msg");
   if (ok) el("trigger-form").reset();
+});
+
+guardSubmit(el("bulk-trigger-form"), async () => {
+  const response = await fetch("/api/triggers/bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      stop_loss_percent: el("bt-sl").value,
+      take_profit_percent: el("bt-tp").value,
+      buy_dip_percent: el("bt-buy").value,
+    }),
+  });
+  const msg = el("bt-msg");
+  const body = await response.json().catch(() => ({}));
+  msg.className = "";
+  if (!response.ok) {
+    msg.textContent = "실패: " + (body.detail ?? response.status);
+    el("bt-result").innerHTML = "";
+    return;
+  }
+  const applied = body.applied || [];
+  const skipped = body.skipped || [];
+  msg.textContent = `적용 ${applied.length}건, 건너뜀 ${skipped.length}건`;
+  el("bt-result").innerHTML = `
+    ${applied.length ? `<p><strong>적용됨</strong></p><ul>${applied.map((a) =>
+      `<li>${esc(a.name)}(${esc(a.asset_id)}): 손절 ${esc(a.stop_loss_at)} · 매수 ${esc(a.buy_at)} · 익절 ${esc(a.take_profit_at)}</li>`
+    ).join("")}</ul>` : ""}
+    ${skipped.length ? `<p><strong>건너뜀</strong></p><ul>${skipped.map((s) =>
+      `<li>${esc(s.name)}(${esc(s.asset_id)}): ${esc(s.reason)}</li>`
+    ).join("")}</ul>` : ""}`;
+  if (applied.length) {
+    load();
+    loadAudit();
+  }
 });
 
 guardSubmit(el("asset-form"), async () => {

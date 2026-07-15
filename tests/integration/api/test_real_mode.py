@@ -409,6 +409,73 @@ class TestAssetAndTriggerEntry:
         assert resp.status_code == 400
 
 
+class TestBulkTriggers:
+    def _client(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        monkeypatch.setenv("PAMS_MODE", "real")
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            recorder.execute(as_of=day, base_currency=Currency.KRW)
+        service = real_dashboard_service(project_root)
+        return TestClient(
+            create_app(service, data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+
+    def test_bulk_apply_computes_and_saves_for_equities_only(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.post(
+            "/api/triggers/bulk",
+            json={
+                "stop_loss_percent": "20",
+                "take_profit_percent": "20",
+                "buy_dip_percent": "20",
+            },
+        )
+        assert response.status_code == 201
+        body = response.json()
+        applied_ids = {a["asset_id"] for a in body["applied"]}
+        assert applied_ids == {"KRX:005930"}  # 채권(KRX:114260)은 주식이 아니라 제외
+        assert body["skipped"] == []
+        yaml_text = (project_root / "config" / "triggers" / "default.yaml").read_text("utf-8")
+        assert "KRX:005930" in yaml_text
+
+    def test_bulk_apply_skips_when_order_invalid(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        # 매수%를 극단적으로 크게 주면 매수선이 손절선보다 낮아져 순서 검증에 걸린다.
+        response = client.post(
+            "/api/triggers/bulk",
+            json={
+                "stop_loss_percent": "1",
+                "take_profit_percent": "20",
+                "buy_dip_percent": "50",
+            },
+        )
+        assert response.status_code == 201
+        body = response.json()
+        assert body["applied"] == []
+        assert body["skipped"][0]["asset_id"] == "KRX:005930"
+
+    def test_demo_mode_blocks_bulk_triggers(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PAMS_MODE", "demo")
+        client = TestClient(
+            create_app(data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+        response = client.post(
+            "/api/triggers/bulk",
+            json={
+                "stop_loss_percent": "20",
+                "take_profit_percent": "20",
+                "buy_dip_percent": "20",
+            },
+        )
+        assert response.status_code == 400
+
+
 class TestCli:
     def test_snapshot_command(self, project_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from pams.interfaces.cli.__main__ import main

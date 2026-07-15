@@ -12,8 +12,6 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from pams.dca.application import PlanDcaOrders
-from pams.dca.infrastructure import DcaConfigError, YamlDcaPlanLoader
 from pams.equity.domain import (
     EvaluatePriceTriggers,
     EvaluateStockAllocation,
@@ -190,11 +188,11 @@ class DashboardService:
     def _today_actions(
         self, snapshot: PortfolioSnapshot, proposal: RebalancingProposal, as_of: date
     ) -> list[dict[str, Any]]:
-        """오늘 무엇을 사고/팔지 — 세 신호원을 우선순위로 합친 액션 목록.
+        """오늘 무엇을 사고/팔지 — 신호원을 우선순위로 합친 액션 목록.
 
         1) 가격 트리거(사용자가 정한 매수/매도 가격선을 현재가가 건드림)
-        2) 정기 매수(DCA) 예정
-        3) 리밸런싱 밴드 이탈(자산군 단위)
+        2) 리밸런싱 밴드 이탈(자산군 단위)
+        DCA(정기매수)는 이미 정해진 일정이라 '액션'이 아니므로 포함하지 않는다.
         시스템은 신호까지만 제시하고 실행은 사용자가 한다.
         """
         names = {v.asset.asset_id: v.asset.name for v in snapshot.valuations}
@@ -230,34 +228,7 @@ class DashboardService:
                         }
                     )
 
-        # 2) 정기 매수(DCA) 예정
-        dca_path = self.config_dir / "dca" / "default.yaml"
-        if dca_path.exists():
-            try:
-                dca_plan = YamlDcaPlanLoader(dca_path).load()
-            except DcaConfigError:
-                dca_plan = None
-            if dca_plan is not None:
-                for order in PlanDcaOrders(plan=dca_plan).execute(as_of=as_of):
-                    if order.amount is not None:
-                        guide = format_money(order.amount)
-                    else:
-                        assert order.quantity is not None
-                        guide = f"{order.quantity.value:g}주"
-                    actions.append(
-                        {
-                            "source": "dca",
-                            "source_label": "정기 매수(DCA)",
-                            "asset_id": order.asset_id,
-                            "asset": names.get(order.asset_id, order.asset_id),
-                            "direction": "buy",
-                            "direction_label": "매수",
-                            "reason": "정기 적립매수 예정",
-                            "guide": guide,
-                        }
-                    )
-
-        # 3) 리밸런싱 밴드 이탈(자산군 단위)
+        # 2) 리밸런싱 밴드 이탈(자산군 단위)
         for a in proposal.actions:
             is_buy = a.direction is TradeDirection.BUY
             actions.append(
@@ -277,7 +248,7 @@ class DashboardService:
             )
 
         # 매수/매도 신호를 앞으로, 신호원 순서 유지
-        order_key = {"price_trigger": 0, "rebalancing": 1, "dca": 2}
+        order_key = {"price_trigger": 0, "rebalancing": 1}
         actions.sort(key=lambda x: order_key.get(x["source"], 9))
         return actions
 

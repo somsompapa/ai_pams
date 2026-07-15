@@ -476,8 +476,22 @@ function syncTxFields() {
 el("tx-type").addEventListener("change", syncTxFields);
 syncTxFields();
 
-el("tx-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
+// 폼 제출 중 버튼을 비활성화해 중복 클릭/느린 응답 중 재클릭으로 인한
+// 이중 제출(같은 거래가 두 번 기록되는 문제)을 막는다.
+function guardSubmit(form, handler) {
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector('button[type="submit"]');
+    if (button) button.disabled = true;
+    try {
+      await handler();
+    } finally {
+      if (button) button.disabled = false;
+    }
+  });
+}
+
+guardSubmit(el("tx-form"), async () => {
   const payload = {
     type: el("tx-type").value,
     currency: el("tx-currency").value,
@@ -508,6 +522,7 @@ el("tx-form").addEventListener("submit", async (event) => {
   }
 });
 
+
 async function postConfig(url, payload, msgId) {
   const response = await fetch(url, {
     method: "POST",
@@ -527,8 +542,7 @@ async function postConfig(url, payload, msgId) {
   return false;
 }
 
-el("trigger-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
+guardSubmit(el("trigger-form"), async () => {
   const ok = await postConfig("/api/triggers", {
     asset_id: el("tg-asset").value,
     currency: el("tg-currency").value,
@@ -539,8 +553,7 @@ el("trigger-form").addEventListener("submit", async (event) => {
   if (ok) el("trigger-form").reset();
 });
 
-el("asset-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
+guardSubmit(el("asset-form"), async () => {
   const ok = await postConfig("/api/assets", {
     asset_id: el("as-id").value,
     name: el("as-name").value,
@@ -552,8 +565,7 @@ el("asset-form").addEventListener("submit", async (event) => {
   if (ok) el("asset-form").reset();
 });
 
-el("journal-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
+guardSubmit(el("journal-form"), async () => {
   const response = await fetch("/api/journal", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

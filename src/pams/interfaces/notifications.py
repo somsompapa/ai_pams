@@ -19,7 +19,7 @@ from pams.ips.domain import ComplianceReport
 
 # 가격 트리거·리밸런싱은 조건이 유지되는 동안 계속 '발동' 상태다.
 # 매일 반복 알림하지 않도록, 이 신호원들은 '이전에 없던 것'만 새로 알린다.
-# DCA(정기매수)는 그날 해야 할 일이라 매일 포함한다.
+# (다른 신호원이 추가되면 매일 반복 알림이 필요한지 여기서 판단한다.)
 _PERSISTENT_SOURCES = frozenset({"price_trigger", "rebalancing"})
 
 

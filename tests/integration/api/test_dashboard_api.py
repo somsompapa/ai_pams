@@ -69,7 +69,12 @@ class TestDashboardApi:
                 "reason",
             }
             assert a["direction"] in {"buy", "sell"}
-            assert a["source"] in {"price_trigger", "dca", "rebalancing"}
+            assert a["source"] in {"price_trigger", "rebalancing"}
+
+    def test_today_actions_excludes_dca(self, client: TestClient) -> None:
+        """DCA는 정해진 일정이라 '오늘의 액션'에 포함하지 않는다."""
+        data = client.get("/api/dashboard").json()
+        assert all(a["source"] != "dca" for a in data["today_actions"])
 
     def test_stock_allocation_section(self, client: TestClient) -> None:
         data = client.get("/api/dashboard").json()

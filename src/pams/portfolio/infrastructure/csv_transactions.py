@@ -51,6 +51,40 @@ class CsvTransactionRepository:
         transactions = self._load_all()
         return [t for t in transactions if t.trade_date <= as_of]
 
+    def list_all(self) -> list[Transaction]:
+        """전체 거래 내역(파일 순서). 파일이 없으면 빈 목록."""
+        if not self._path.exists():
+            return []
+        return self._load_all()
+
+    def update(self, transaction_id: str, transaction: Transaction) -> None:
+        """transaction_id에 해당하는 거래를 새 내용으로 교체한다."""
+        rows = self._load_all()
+        if not any(t.transaction_id == transaction_id for t in rows):
+            raise CsvDataError(f"transaction_id '{transaction_id}'를 찾을 수 없다")
+        if transaction.transaction_id != transaction_id and any(
+            t.transaction_id == transaction.transaction_id for t in rows
+        ):
+            raise CsvDataError(f"중복된 transaction_id '{transaction.transaction_id}'")
+        updated = [transaction if t.transaction_id == transaction_id else t for t in rows]
+        self._write_all(updated)
+
+    def delete(self, transaction_id: str) -> None:
+        """transaction_id에 해당하는 거래를 제거한다."""
+        rows = self._load_all()
+        remaining = [t for t in rows if t.transaction_id != transaction_id]
+        if len(remaining) == len(rows):
+            raise CsvDataError(f"transaction_id '{transaction_id}'를 찾을 수 없다")
+        self._write_all(remaining)
+
+    def _write_all(self, transactions: list[Transaction]) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(_HEADER)
+            for transaction in transactions:
+                writer.writerow(self._to_row(transaction))
+
     def append(self, transaction: Transaction) -> None:
         """거래 한 건을 파일 끝에 추가한다. 거래내역이 유일한 원천이므로,
         기존 행은 건드리지 않고 append만 한다. 파일이 없으면 헤더부터 만든다.

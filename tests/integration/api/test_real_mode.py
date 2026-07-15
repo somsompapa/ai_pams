@@ -159,6 +159,168 @@ class TestTransactionEntry:
         assert response.status_code == 400
 
 
+class TestTransactionListEditDelete:
+    def _client(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        monkeypatch.setenv("PAMS_MODE", "real")
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            recorder.execute(as_of=day, base_currency=Currency.KRW)
+        service = real_dashboard_service(project_root)
+        return TestClient(
+            create_app(service, data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+
+    def test_list_transactions_returns_all(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.get("/api/transactions")
+        assert response.status_code == 200
+        ids = {t["transaction_id"] for t in response.json()["transactions"]}
+        assert ids == {"t1", "t2", "t3"}
+
+    def test_edit_transaction_updates_row(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.put(
+            "/api/transactions/t2",
+            json={
+                "type": "buy",
+                "currency": "KRW",
+                "asset_id": "KRX:005930",
+                "quantity": "120",
+                "price": "70000",
+                "note": "수량 정정",
+            },
+        )
+        assert response.status_code == 200
+        service = real_dashboard_service(project_root)
+        data = service.build(as_of=AS_OF, base_currency=Currency.KRW)
+        samsung = next(s for s in data["stocks"] if s["asset_id"] == "KRX:005930")
+        assert samsung["quantity"] == "120.0000"
+
+    def test_edit_unknown_transaction_rejected(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.put(
+            "/api/transactions/nope",
+            json={"type": "deposit", "currency": "KRW", "amount": "1000"},
+        )
+        assert response.status_code == 400
+
+    def test_delete_transaction_removes_row(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.delete("/api/transactions/t3")
+        assert response.status_code == 204
+        csv_text = (project_root / "data" / "transactions.csv").read_text(encoding="utf-8")
+        assert "t3" not in csv_text
+
+    def test_demo_mode_blocks_list_edit_delete(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PAMS_MODE", "demo")
+        client = TestClient(
+            create_app(data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+        assert client.get("/api/transactions").status_code == 400
+        assert client.delete("/api/transactions/t1").status_code == 400
+
+
+class TestReconcile:
+    def _client(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        monkeypatch.setenv("PAMS_MODE", "real")
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            recorder.execute(as_of=day, base_currency=Currency.KRW)
+        service = real_dashboard_service(project_root)
+        return TestClient(
+            create_app(service, data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+
+    def test_reconcile_cash_creates_deposit_for_shortfall(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        # 계산상 예수금 10,998,350 (20,000,000 - 7,001,050 - 2,000,600)
+        response = client.post(
+            "/api/reconcile/cash",
+            json={"currency": "KRW", "target_balance": "11998350", "note": "통장 확인"},
+        )
+        assert response.status_code == 201
+        assert response.json()["diff"] == "1000000"
+        csv_text = (project_root / "data" / "transactions.csv").read_text(encoding="utf-8")
+        assert "deposit" in csv_text and "통장 확인" in csv_text
+
+    def test_reconcile_cash_creates_withdrawal_for_excess(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.post(
+            "/api/reconcile/cash", json={"currency": "KRW", "target_balance": "9998350"}
+        )
+        assert response.status_code == 201
+        assert response.json()["diff"] == "-1000000"
+
+    def test_reconcile_cash_noop_when_matching(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.post(
+            "/api/reconcile/cash", json={"currency": "KRW", "target_balance": "10998350"}
+        )
+        assert response.status_code == 201
+        assert response.json() == {"transaction_id": None, "diff": "0"}
+
+    def test_reconcile_holding_creates_buy_for_shortfall(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.post(
+            "/api/reconcile/holding", json={"asset_id": "KRX:005930", "target_quantity": "110"}
+        )
+        assert response.status_code == 201
+        assert response.json()["diff"] == "10"
+        service = real_dashboard_service(project_root)
+        data = service.build(as_of=AS_OF, base_currency=Currency.KRW)
+        samsung = next(s for s in data["stocks"] if s["asset_id"] == "KRX:005930")
+        assert samsung["quantity"] == "110.0000"
+
+    def test_reconcile_holding_creates_sell_for_excess(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.post(
+            "/api/reconcile/holding", json={"asset_id": "KRX:005930", "target_quantity": "90"}
+        )
+        assert response.status_code == 201
+        assert response.json()["diff"] == "-10"
+
+    def test_reconcile_holding_without_price_data_rejected(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.post(
+            "/api/reconcile/holding", json={"asset_id": "KRX:999999", "target_quantity": "5"}
+        )
+        assert response.status_code == 400
+
+    def test_demo_mode_blocks_reconcile(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PAMS_MODE", "demo")
+        client = TestClient(
+            create_app(data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+        response = client.post(
+            "/api/reconcile/cash", json={"currency": "KRW", "target_balance": "1"}
+        )
+        assert response.status_code == 400
+
+
 class TestAssetAndTriggerEntry:
     def _client(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         monkeypatch.setenv("PAMS_MODE", "real")

@@ -74,6 +74,82 @@ class TestAppend:
             )
 
 
+class TestListAll:
+    def test_returns_all_transactions(self, tmp_path: Path) -> None:
+        repo = CsvTransactionRepository(write(tmp_path, VALID))
+        assert [t.transaction_id for t in repo.list_all()] == ["t1", "t2", "t3", "t4"]
+
+    def test_missing_file_returns_empty(self, tmp_path: Path) -> None:
+        repo = CsvTransactionRepository(tmp_path / "nope.csv")
+        assert repo.list_all() == []
+
+
+class TestUpdate:
+    def test_replaces_matching_row(self, tmp_path: Path) -> None:
+        repo = CsvTransactionRepository(write(tmp_path, VALID))
+        repo.update(
+            "t2",
+            Transaction(
+                transaction_id="t2",
+                transaction_type=TransactionType.BUY,
+                trade_date=date(2026, 1, 5),
+                asset_id="KRX:005930",
+                quantity=Quantity.of("120"),
+                price=Money.of("71000", Currency.KRW),
+                note="수량 정정",
+            ),
+        )
+        transactions = repo.transactions_until(date(2026, 12, 31))
+        assert [t.transaction_id for t in transactions] == ["t1", "t2", "t3", "t4"]
+        edited = transactions[1]
+        assert edited.quantity is not None and str(edited.quantity.value) == "120"
+        assert edited.note == "수량 정정"
+
+    def test_unknown_id_raises(self, tmp_path: Path) -> None:
+        repo = CsvTransactionRepository(write(tmp_path, VALID))
+        with pytest.raises(CsvDataError, match="찾을 수 없다"):
+            repo.update(
+                "nope",
+                Transaction(
+                    transaction_id="nope",
+                    transaction_type=TransactionType.DEPOSIT,
+                    trade_date=date(2026, 1, 1),
+                    amount=Money.of("1", Currency.KRW),
+                ),
+            )
+
+    def test_rejects_id_collision_with_other_row(self, tmp_path: Path) -> None:
+        repo = CsvTransactionRepository(write(tmp_path, VALID))
+        with pytest.raises(CsvDataError, match="중복"):
+            repo.update(
+                "t2",
+                Transaction(
+                    transaction_id="t3",
+                    transaction_type=TransactionType.BUY,
+                    trade_date=date(2026, 1, 5),
+                    asset_id="KRX:005930",
+                    quantity=Quantity.of("1"),
+                    price=Money.of("1", Currency.KRW),
+                ),
+            )
+
+
+class TestDelete:
+    def test_removes_matching_row(self, tmp_path: Path) -> None:
+        repo = CsvTransactionRepository(write(tmp_path, VALID))
+        repo.delete("t2")
+        assert [t.transaction_id for t in repo.transactions_until(date(2026, 12, 31))] == [
+            "t1",
+            "t3",
+            "t4",
+        ]
+
+    def test_unknown_id_raises(self, tmp_path: Path) -> None:
+        repo = CsvTransactionRepository(write(tmp_path, VALID))
+        with pytest.raises(CsvDataError, match="찾을 수 없다"):
+            repo.delete("nope")
+
+
 class TestCsvTransactionRepository:
     def test_satisfies_port(self, tmp_path: Path) -> None:
         repository = CsvTransactionRepository(write(tmp_path, VALID))

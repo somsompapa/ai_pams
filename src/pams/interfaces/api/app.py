@@ -16,6 +16,7 @@ import secrets
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal
 
@@ -37,8 +38,8 @@ from pams.interfaces.api.service import DashboardService
 from pams.journal.application import ListJournalEntries, RecordJournalEntry
 from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
-from pams.market_data.infrastructure import upsert_price_symbol
-from pams.portfolio.domain import Transaction, TransactionType
+from pams.market_data.infrastructure import CsvPriceLookup, upsert_price_symbol
+from pams.portfolio.domain import CashLedger, PositionLedger, Transaction, TransactionType
 from pams.portfolio.infrastructure import CsvDataError, CsvTransactionRepository
 from pams.shared_kernel.domain import (
     Asset,
@@ -103,6 +104,22 @@ class TriggerRequest(BaseModel):
     buy_at: str | None = None
     take_profit_at: str | None = None
     stop_loss_at: str | None = None
+
+
+class CashReconcileRequest(BaseModel):
+    """실제 현금 잔액에 맞춰 입금/출금 보정 거래를 만든다."""
+
+    currency: str
+    target_balance: str
+    note: str = ""
+
+
+class HoldingReconcileRequest(BaseModel):
+    """실제 보유수량에 맞춰 매수/매도 보정 거래를 만든다."""
+
+    asset_id: str
+    target_quantity: str
+    note: str = ""
 
 
 def _is_real_mode() -> bool:
@@ -317,14 +334,17 @@ def create_app(
             "ai_draft": entry.ai_draft,
         }
 
-    @app.post("/api/transactions", status_code=201)
-    def record_transaction(request: TransactionRequest) -> dict[str, Any]:
+    def _require_real_mode() -> None:
         if not _is_real_mode():
             raise HTTPException(
                 status_code=400,
-                detail="데모 모드에서는 거래 입력이 비활성이다 (PAMS_MODE=real에서만 기록).",
+                detail="데모 모드에서는 설정 변경이 비활성이다 (PAMS_MODE=real에서만).",
             )
-        today = as_of()
+
+    def _transaction_repository() -> CsvTransactionRepository:
+        return CsvTransactionRepository(storage_dir / "transactions.csv")
+
+    def _build_transaction(transaction_id: str, request: TransactionRequest) -> Transaction:
         try:
             currency = Currency(request.currency)
         except ValueError:
@@ -332,7 +352,7 @@ def create_app(
                 status_code=400, detail=f"알 수 없는 통화: {request.currency}"
             ) from None
         try:
-            trade_date = date.fromisoformat(request.trade_date) if request.trade_date else today
+            trade_date = date.fromisoformat(request.trade_date) if request.trade_date else as_of()
         except ValueError:
             raise HTTPException(
                 status_code=400, detail=f"잘못된 날짜: {request.trade_date}"
@@ -341,8 +361,8 @@ def create_app(
         def money(value: str | None) -> Money | None:
             return Money.of(value, currency) if value not in (None, "") else None
 
-        transaction = Transaction(
-            transaction_id=f"{today.isoformat()}-{uuid.uuid4().hex[:8]}",
+        return Transaction(
+            transaction_id=transaction_id,
             transaction_type=TransactionType(request.type),
             trade_date=trade_date,
             asset_id=request.asset_id or None,
@@ -353,7 +373,17 @@ def create_app(
             tax=money(request.tax),
             note=request.note,
         )
-        repository = CsvTransactionRepository(storage_dir / "transactions.csv")
+
+    @app.post("/api/transactions", status_code=201)
+    def record_transaction(request: TransactionRequest) -> dict[str, Any]:
+        if not _is_real_mode():
+            raise HTTPException(
+                status_code=400,
+                detail="데모 모드에서는 거래 입력이 비활성이다 (PAMS_MODE=real에서만 기록).",
+            )
+        transaction_id = f"{as_of().isoformat()}-{uuid.uuid4().hex[:8]}"
+        transaction = _build_transaction(transaction_id, request)
+        repository = _transaction_repository()
         try:
             repository.append(transaction)
         except CsvDataError as error:
@@ -368,12 +398,163 @@ def create_app(
         )
         return {"transaction_id": transaction.transaction_id}
 
-    def _require_real_mode() -> None:
-        if not _is_real_mode():
+    @app.get("/api/transactions")
+    def list_transactions() -> dict[str, Any]:
+        _require_real_mode()
+        rows = _transaction_repository().list_all()
+        rows_sorted = sorted(rows, key=lambda t: (t.trade_date, t.transaction_id), reverse=True)
+
+        def field(money: Money | None) -> str:
+            return "" if money is None or money.is_zero else str(money.amount)
+
+        return {
+            "transactions": [
+                {
+                    "transaction_id": t.transaction_id,
+                    "type": t.transaction_type.value,
+                    "trade_date": t.trade_date.isoformat(),
+                    "asset_id": t.asset_id or "",
+                    "quantity": "" if t.quantity is None else str(t.quantity.value),
+                    "price": "" if t.price is None else str(t.price.amount),
+                    "amount": "" if t.amount is None else str(t.amount.amount),
+                    "fee": field(t.fee),
+                    "tax": field(t.tax),
+                    "currency": t.currency.value,
+                    "note": t.note,
+                }
+                for t in rows_sorted
+            ]
+        }
+
+    @app.put("/api/transactions/{transaction_id}")
+    def edit_transaction(transaction_id: str, request: TransactionRequest) -> dict[str, Any]:
+        _require_real_mode()
+        transaction = _build_transaction(transaction_id, request)
+        try:
+            _transaction_repository().update(transaction_id, transaction)
+        except CsvDataError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        record_audit(
+            actor="user",
+            action="transaction.updated",
+            detail=f"거래 {transaction_id} 수정: {request.type} {request.asset_id or ''}",
+            reason=request.note or "웹 거래 수정",
+        )
+        return {"transaction_id": transaction.transaction_id}
+
+    @app.delete("/api/transactions/{transaction_id}", status_code=204)
+    def delete_transaction(transaction_id: str) -> Response:
+        _require_real_mode()
+        try:
+            _transaction_repository().delete(transaction_id)
+        except CsvDataError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        record_audit(
+            actor="user",
+            action="transaction.deleted",
+            detail=f"거래 {transaction_id} 삭제",
+            reason="웹 거래 삭제",
+        )
+        return Response(status_code=204)
+
+    @app.post("/api/reconcile/cash", status_code=201)
+    def reconcile_cash(request: CashReconcileRequest) -> dict[str, Any]:
+        _require_real_mode()
+        try:
+            currency = Currency(request.currency)
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail=f"알 수 없는 통화: {request.currency}"
+            ) from None
+        try:
+            target = Decimal(request.target_balance)
+        except InvalidOperation:
+            raise HTTPException(
+                status_code=400, detail=f"잘못된 금액: {request.target_balance}"
+            ) from None
+
+        today = as_of()
+        repository = _transaction_repository()
+        balances = CashLedger().build(repository.transactions_until(today))
+        current = balances.get(currency, Money.zero(currency)).amount
+        diff = target - current
+        if diff == 0:
+            return {"transaction_id": None, "diff": "0"}
+
+        transaction = Transaction(
+            transaction_id=f"{today.isoformat()}-{uuid.uuid4().hex[:8]}",
+            transaction_type=TransactionType.DEPOSIT if diff > 0 else TransactionType.WITHDRAWAL,
+            trade_date=today,
+            amount=Money(abs(diff), currency),
+            note=request.note or "잔액 보정",
+        )
+        try:
+            repository.append(transaction)
+        except CsvDataError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        record_audit(
+            actor="user",
+            action="cash.reconciled",
+            detail=(
+                f"현금 잔액 보정({currency.value}): {current} → {target} "
+                f"({transaction.transaction_type.value} {abs(diff)})"
+            ),
+            reason=request.note or "웹 잔액 맞추기",
+        )
+        return {"transaction_id": transaction.transaction_id, "diff": str(diff)}
+
+    @app.post("/api/reconcile/holding", status_code=201)
+    def reconcile_holding(request: HoldingReconcileRequest) -> dict[str, Any]:
+        _require_real_mode()
+        asset_id = request.asset_id.strip()
+        try:
+            target_quantity = Decimal(request.target_quantity)
+        except InvalidOperation:
+            raise HTTPException(
+                status_code=400, detail=f"잘못된 수량: {request.target_quantity}"
+            ) from None
+        if target_quantity < 0:
+            raise HTTPException(status_code=400, detail="수량은 0 이상이어야 한다")
+
+        today = as_of()
+        repository = _transaction_repository()
+        positions = PositionLedger().build(repository.transactions_until(today))
+        position = positions.get(asset_id)
+        current_quantity = position.quantity.value if position is not None else Decimal(0)
+        diff = target_quantity - current_quantity
+        if diff == 0:
+            return {"transaction_id": None, "diff": "0"}
+
+        price = CsvPriceLookup(storage_dir / "prices.csv").price_of(asset_id, today)
+        if price is None:
             raise HTTPException(
                 status_code=400,
-                detail="데모 모드에서는 설정 변경이 비활성이다 (PAMS_MODE=real에서만).",
+                detail=f"{asset_id}의 현재가를 찾을 수 없어 보정 거래를 만들 수 없다",
             )
+
+        transaction = Transaction(
+            transaction_id=f"{today.isoformat()}-{uuid.uuid4().hex[:8]}",
+            transaction_type=TransactionType.BUY if diff > 0 else TransactionType.SELL,
+            trade_date=today,
+            asset_id=asset_id,
+            quantity=Quantity.of(abs(diff)),
+            price=price,
+            note=request.note or "보유수량 보정",
+        )
+        try:
+            repository.append(transaction)
+        except CsvDataError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        record_audit(
+            actor="user",
+            action="holding.reconciled",
+            detail=(
+                f"보유수량 보정({asset_id}): {current_quantity} → {target_quantity} "
+                f"({transaction.transaction_type.value} {abs(diff)})"
+            ),
+            reason=request.note or "웹 잔액 맞추기",
+        )
+        return {"transaction_id": transaction.transaction_id, "diff": str(diff)}
 
     @app.post("/api/assets", status_code=201)
     def register_asset(request: AssetRequest) -> dict[str, Any]:

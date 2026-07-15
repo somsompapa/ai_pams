@@ -197,9 +197,40 @@
       </select>
       <input id="tx-date" type="date">
       <input id="tx-note" placeholder="메모(선택)">
-      <button type="submit">기록</button>
+      <input type="hidden" id="tx-edit-id" value="">
+      <button type="submit" id="tx-submit-btn">기록</button>
+      <button type="button" id="tx-cancel-btn" style="display:none">취소</button>
     </form>
     <p id="tx-msg" class="empty">거래를 기록하면 보유수량·평단가·예수금·비중이 자동으로 다시 계산된다.</p>
+    <details class="sub-form">
+      <summary>＋ 현금 잔액 맞추기</summary>
+      <form id="cash-reconcile-form" class="tx-form">
+        <select id="cr-currency">
+          <option value="KRW">KRW</option>
+          <option value="USD">USD</option>
+          <option value="JPY">JPY</option>
+        </select>
+        <input id="cr-balance" placeholder="실제 잔액" inputmode="decimal" required>
+        <input id="cr-note" placeholder="메모(선택)">
+        <button type="submit">잔액 맞추기</button>
+      </form>
+      <p id="cr-msg" class="empty">계산된 잔액과의 차액만큼 입금/출금 거래가 자동 기록된다.</p>
+    </details>
+    <details class="sub-form">
+      <summary>＋ 보유수량 맞추기</summary>
+      <form id="holding-reconcile-form" class="tx-form">
+        <input id="hr-asset" list="asset-options" placeholder="종목 (예: KRX:005930)" required>
+        <input id="hr-quantity" placeholder="실제 보유수량" inputmode="decimal" required>
+        <input id="hr-note" placeholder="메모(선택)">
+        <button type="submit">수량 맞추기</button>
+      </form>
+      <p id="hr-msg" class="empty">차액만큼 현재가로 매수/매도 거래가 자동 기록된다 (평균단가·평가손익에 영향을 준다).</p>
+    </details>
+  </section>
+  <section class="card wide" data-tab="portfolio">
+    <h2>거래 내역</h2>
+    <div class="holdings-scroll"><table id="tx-table"></table></div>
+    <p id="tx-list-msg" class="empty"></p>
   </section>
   <section class="card wide" data-tab="portfolio">
     <h2>주식 종목 (보유 · 매수/매도 트리거)</h2>
@@ -376,7 +407,7 @@ async function load() {
         <span class="why">${esc(a.reason)}</span>
         <span class="guide">${esc(a.guide || "")}</span>
       </div>`).join("")
-    : '<p class="empty">오늘은 발동한 매수/매도 신호가 없다. (가격 트리거·DCA·리밸런싱 모두 조건 미충족)</p>';
+    : '<p class="empty">오늘은 발동한 매수/매도 신호가 없다. (가격 트리거·리밸런싱 모두 조건 미충족)</p>';
 
   const stocks = d.stocks || [];
   el("stocks-note").textContent = stocks.some((s) => s.signal === "none")
@@ -476,6 +507,84 @@ function syncTxFields() {
 el("tx-type").addEventListener("change", syncTxFields);
 syncTxFields();
 
+function resetTxEditMode() {
+  el("tx-edit-id").value = "";
+  el("tx-submit-btn").textContent = "기록";
+  el("tx-cancel-btn").style.display = "none";
+}
+el("tx-cancel-btn").addEventListener("click", () => {
+  el("tx-form").reset();
+  syncTxFields();
+  resetTxEditMode();
+});
+
+const txTypeLabel = {
+  buy: "매수", sell: "매도", dividend: "배당", interest: "이자",
+  deposit: "입금", withdrawal: "출금", fee: "수수료", tax: "세금",
+};
+
+async function loadTransactions() {
+  const response = await fetch("/api/transactions");
+  if (!response.ok) return;
+  const { transactions } = await response.json();
+
+  el("tx-table").innerHTML = transactions.length
+    ? `<thead><tr>
+         <th>날짜</th><th>구분</th><th>종목</th><th class="num">수량</th><th class="num">가격</th>
+         <th class="num">금액</th><th>메모</th><th></th>
+       </tr></thead>
+       <tbody>${transactions.map((t) => `
+         <tr>
+           <td>${esc(t.trade_date)}</td>
+           <td>${esc(txTypeLabel[t.type] || t.type)}</td>
+           <td>${esc(t.asset_id)}</td>
+           <td class="num">${esc(t.quantity)}</td>
+           <td class="num">${esc(t.price)}</td>
+           <td class="num">${esc(t.amount)}</td>
+           <td>${esc(t.note)}</td>
+           <td>
+             <button type="button" class="tx-edit" data-id="${esc(t.transaction_id)}">수정</button>
+             <button type="button" class="tx-delete" data-id="${esc(t.transaction_id)}">삭제</button>
+           </td>
+         </tr>`).join("")}</tbody>`
+    : '<tbody><tr><td class="empty">거래 내역이 없다.</td></tr></tbody>';
+
+  el("tx-table").querySelectorAll(".tx-edit").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const t = transactions.find((x) => x.transaction_id === btn.dataset.id);
+      if (!t) return;
+      el("tx-type").value = t.type;
+      el("tx-currency").value = t.currency;
+      el("tx-asset").value = t.asset_id;
+      el("tx-qty").value = t.quantity;
+      el("tx-price").value = t.price;
+      el("tx-amount").value = t.amount;
+      el("tx-date").value = t.trade_date;
+      el("tx-note").value = t.note;
+      el("tx-edit-id").value = t.transaction_id;
+      el("tx-submit-btn").textContent = "수정 저장";
+      el("tx-cancel-btn").style.display = "";
+      syncTxFields();
+      el("tx-form").scrollIntoView({ behavior: "smooth", block: "center" });
+    }));
+
+  el("tx-table").querySelectorAll(".tx-delete").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      if (!confirm("이 거래를 삭제할까? (되돌릴 수 없다)")) return;
+      const response = await fetch("/api/transactions/" + encodeURIComponent(btn.dataset.id), {
+        method: "DELETE",
+      });
+      if (response.ok) {
+        load();
+        loadTransactions();
+        loadAudit();
+      } else {
+        const body = await response.json().catch(() => ({}));
+        alert("삭제 실패: " + (body.detail ?? response.status));
+      }
+    }));
+}
+
 // 폼 제출 중 버튼을 비활성화해 중복 클릭/느린 응답 중 재클릭으로 인한
 // 이중 제출(같은 거래가 두 번 기록되는 문제)을 막는다.
 function guardSubmit(form, handler) {
@@ -502,23 +611,81 @@ guardSubmit(el("tx-form"), async () => {
     trade_date: el("tx-date").value || null,
     note: el("tx-note").value || "",
   };
-  const response = await fetch("/api/transactions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const editId = el("tx-edit-id").value;
+  const response = await fetch(
+    editId ? "/api/transactions/" + encodeURIComponent(editId) : "/api/transactions",
+    {
+      method: editId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
   const msg = el("tx-msg");
   if (response.ok) {
     el("tx-form").reset();
     syncTxFields();
+    resetTxEditMode();
     msg.className = "";
-    msg.textContent = "✅ 기록 완료 — 다시 계산 중…";
+    msg.textContent = (editId ? "✅ 수정 완료" : "✅ 기록 완료") + " — 다시 계산 중…";
     load();
+    loadTransactions();
     loadAudit();
   } else {
     const body = await response.json().catch(() => ({}));
     msg.className = "";
-    msg.textContent = "기록 실패: " + (body.detail ?? response.status);
+    msg.textContent = (editId ? "수정 실패: " : "기록 실패: ") + (body.detail ?? response.status);
+  }
+});
+
+guardSubmit(el("cash-reconcile-form"), async () => {
+  const response = await fetch("/api/reconcile/cash", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      currency: el("cr-currency").value,
+      target_balance: el("cr-balance").value,
+      note: el("cr-note").value || "",
+    }),
+  });
+  const msg = el("cr-msg");
+  const body = await response.json().catch(() => ({}));
+  msg.className = "";
+  if (response.ok) {
+    msg.textContent = body.transaction_id
+      ? `✅ 보정 완료 (차액 ${body.diff}) — 다시 계산 중…`
+      : "이미 일치한다 (보정 불필요).";
+    if (body.transaction_id) el("cash-reconcile-form").reset();
+    load();
+    loadTransactions();
+    loadAudit();
+  } else {
+    msg.textContent = "실패: " + (body.detail ?? response.status);
+  }
+});
+
+guardSubmit(el("holding-reconcile-form"), async () => {
+  const response = await fetch("/api/reconcile/holding", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      asset_id: el("hr-asset").value,
+      target_quantity: el("hr-quantity").value,
+      note: el("hr-note").value || "",
+    }),
+  });
+  const msg = el("hr-msg");
+  const body = await response.json().catch(() => ({}));
+  msg.className = "";
+  if (response.ok) {
+    msg.textContent = body.transaction_id
+      ? `✅ 보정 완료 (차액 ${body.diff}주) — 다시 계산 중…`
+      : "이미 일치한다 (보정 불필요).";
+    if (body.transaction_id) el("holding-reconcile-form").reset();
+    load();
+    loadTransactions();
+    loadAudit();
+  } else {
+    msg.textContent = "실패: " + (body.detail ?? response.status);
   }
 });
 
@@ -617,6 +784,7 @@ async function loadAudit() {
 }
 
 load();
+loadTransactions();
 loadJournal();
 loadAudit();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");

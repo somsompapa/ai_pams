@@ -27,12 +27,26 @@ from pydantic import BaseModel
 from pams.ai_analysis.application import GenerateAnalysis
 from pams.ai_analysis.domain import AnalysisKind, TextCompletion
 from pams.ai_analysis.infrastructure import AnthropicTextCompletion, GeminiTextCompletion
-from pams.asset.infrastructure import AssetConfigError, append_asset
+from pams.asset.infrastructure import (
+    AssetConfigError,
+    YamlAssetCatalog,
+    append_asset,
+    delete_asset,
+    update_asset,
+)
 from pams.audit.application import RecordAuditEvent
 from pams.audit.domain import AuditEvent
 from pams.audit.infrastructure import JsonlAuditTrail
-from pams.equity.domain import PriceTrigger, band_trigger
-from pams.equity.infrastructure import save_price_trigger
+from pams.equity.domain import PriceTrigger, StockTarget, band_trigger
+from pams.equity.infrastructure import (
+    PriceTriggerConfigError,
+    StockTargetConfigError,
+    YamlStockTargetLoader,
+    delete_price_trigger,
+    delete_stock_target,
+    save_price_trigger,
+    save_stock_target,
+)
 from pams.interfaces.api import demo
 from pams.interfaces.api.service import DashboardService
 from pams.journal.application import ListJournalEntries, RecordJournalEntry
@@ -47,6 +61,7 @@ from pams.shared_kernel.domain import (
     Currency,
     DomainError,
     Money,
+    Percentage,
     Quantity,
 )
 
@@ -112,6 +127,15 @@ class BulkTriggerRequest(BaseModel):
     stop_loss_percent: str
     take_profit_percent: str
     buy_dip_percent: str
+
+
+class StockTargetRequest(BaseModel):
+    """종목별 목표비중(Tier 2, 주식 슬리브 대비)과 매수/매도 밴드."""
+
+    asset_id: str
+    target_percent: str
+    buy_band: str
+    sell_band: str
 
 
 class CashReconcileRequest(BaseModel):
@@ -564,12 +588,10 @@ def create_app(
         )
         return {"transaction_id": transaction.transaction_id, "diff": str(diff)}
 
-    @app.post("/api/assets", status_code=201)
-    def register_asset(request: AssetRequest) -> dict[str, Any]:
-        _require_real_mode()
+    def _build_asset(asset_id: str, request: AssetRequest) -> Asset:
         try:
-            asset = Asset(
-                asset_id=request.asset_id.strip(),
+            return Asset(
+                asset_id=asset_id,
                 name=request.name.strip(),
                 asset_class=AssetClass(request.asset_class),
                 currency=Currency(request.currency),
@@ -578,6 +600,29 @@ def create_app(
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=f"잘못된 자산군/통화: {error}") from None
+
+    @app.get("/api/assets")
+    def list_assets() -> dict[str, Any]:
+        _require_real_mode()
+        assets = YamlAssetCatalog(dashboard_service.config_dir / "assets" / "default.yaml").all()
+        return {
+            "assets": [
+                {
+                    "asset_id": a.asset_id,
+                    "name": a.name,
+                    "asset_class": a.asset_class.value,
+                    "currency": a.currency.value,
+                    "country": a.country,
+                    "sector": a.sector or "",
+                }
+                for a in sorted(assets, key=lambda a: a.asset_id)
+            ]
+        }
+
+    @app.post("/api/assets", status_code=201)
+    def register_asset(request: AssetRequest) -> dict[str, Any]:
+        _require_real_mode()
+        asset = _build_asset(request.asset_id.strip(), request)
         config_dir = dashboard_service.config_dir
         try:
             append_asset(config_dir / "assets" / "default.yaml", asset)
@@ -596,6 +641,52 @@ def create_app(
             reason="웹 종목 추가",
         )
         return {"asset_id": asset.asset_id}
+
+    @app.put("/api/assets/{asset_id}")
+    def edit_asset(asset_id: str, request: AssetRequest) -> dict[str, Any]:
+        _require_real_mode()
+        asset = _build_asset(asset_id, request)
+        config_dir = dashboard_service.config_dir
+        try:
+            update_asset(config_dir / "assets" / "default.yaml", asset_id, asset)
+        except AssetConfigError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if request.yahoo_symbol and request.yahoo_symbol.strip():
+            upsert_price_symbol(
+                config_dir / "market" / "symbols.yaml", asset.asset_id, request.yahoo_symbol.strip()
+            )
+        record_audit(
+            actor="user",
+            action="asset.updated",
+            detail=f"종목 수정: {asset.asset_id} ({asset.name})",
+            reason="웹 종목 수정",
+        )
+        return {"asset_id": asset.asset_id}
+
+    @app.delete("/api/assets/{asset_id}", status_code=204)
+    def remove_asset(asset_id: str) -> Response:
+        _require_real_mode()
+        transactions = _transaction_repository().list_all()
+        referencing = sum(1 for t in transactions if t.asset_id == asset_id)
+        if referencing:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{asset_id}: 거래 내역 {referencing}건이 있어 삭제할 수 없다 "
+                    "(거래를 먼저 정리하라)"
+                ),
+            )
+        try:
+            delete_asset(dashboard_service.config_dir / "assets" / "default.yaml", asset_id)
+        except AssetConfigError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        record_audit(
+            actor="user",
+            action="asset.deleted",
+            detail=f"종목 삭제: {asset_id}",
+            reason="웹 종목 삭제",
+        )
+        return Response(status_code=204)
 
     @app.post("/api/triggers", status_code=201)
     def save_trigger(request: TriggerRequest) -> dict[str, Any]:
@@ -624,6 +715,23 @@ def create_app(
             reason="웹 트리거 설정",
         )
         return {"asset_id": trigger.asset_id}
+
+    @app.delete("/api/triggers/{asset_id}", status_code=204)
+    def remove_trigger(asset_id: str) -> Response:
+        _require_real_mode()
+        try:
+            delete_price_trigger(
+                dashboard_service.config_dir / "triggers" / "default.yaml", asset_id
+            )
+        except PriceTriggerConfigError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        record_audit(
+            actor="user",
+            action="trigger.deleted",
+            detail=f"트리거 삭제: {asset_id}",
+            reason="웹 트리거 삭제",
+        )
+        return Response(status_code=204)
 
     @app.post("/api/triggers/bulk", status_code=201)
     def bulk_save_triggers(request: BulkTriggerRequest) -> dict[str, Any]:
@@ -692,6 +800,66 @@ def create_app(
                 reason="웹 트리거 일괄 설정",
             )
         return {"applied": applied, "skipped": skipped}
+
+    @app.get("/api/stock-targets")
+    def list_stock_targets() -> dict[str, Any]:
+        _require_real_mode()
+        path = dashboard_service.config_dir / "stock_targets" / "default.yaml"
+        targets: list[StockTarget] = []
+        if path.exists():
+            try:
+                targets = list(YamlStockTargetLoader(path).load().targets)
+            except StockTargetConfigError:
+                targets = []
+        return {
+            "targets": [
+                {
+                    "asset_id": t.asset_id,
+                    "target_percent": str(t.target.as_percent),
+                    "buy_band": str(t.buy_band.as_percent),
+                    "sell_band": str(t.sell_band.as_percent),
+                }
+                for t in sorted(targets, key=lambda t: t.asset_id)
+            ]
+        }
+
+    @app.post("/api/stock-targets", status_code=201)
+    def register_stock_target(request: StockTargetRequest) -> dict[str, Any]:
+        _require_real_mode()
+        try:
+            target = StockTarget(
+                asset_id=request.asset_id.strip(),
+                target=Percentage.from_percent(request.target_percent),
+                buy_band=Percentage.from_percent(request.buy_band),
+                sell_band=Percentage.from_percent(request.sell_band),
+            )
+        except (DomainError, InvalidOperation) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from None
+        save_stock_target(dashboard_service.config_dir / "stock_targets" / "default.yaml", target)
+        record_audit(
+            actor="user",
+            action="stock_target.saved",
+            detail=f"종목 목표비중 설정: {target.asset_id} {request.target_percent}%",
+            reason="웹 종목 목표비중 설정",
+        )
+        return {"asset_id": target.asset_id}
+
+    @app.delete("/api/stock-targets/{asset_id}", status_code=204)
+    def remove_stock_target(asset_id: str) -> Response:
+        _require_real_mode()
+        try:
+            delete_stock_target(
+                dashboard_service.config_dir / "stock_targets" / "default.yaml", asset_id
+            )
+        except StockTargetConfigError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        record_audit(
+            actor="user",
+            action="stock_target.deleted",
+            detail=f"종목 목표비중 삭제: {asset_id}",
+            reason="웹 종목 목표비중 삭제",
+        )
+        return Response(status_code=204)
 
     @app.post("/api/analysis")
     def generate_analysis(request: AnalysisRequest) -> dict[str, str]:

@@ -4,9 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from pams.asset.infrastructure import AssetConfigError, YamlAssetCatalog
+from pams.asset.infrastructure import (
+    AssetConfigError,
+    YamlAssetCatalog,
+    append_asset,
+    delete_asset,
+    update_asset,
+)
 from pams.portfolio.domain import AssetCatalog
-from pams.shared_kernel.domain import AssetClass, Currency
+from pams.shared_kernel.domain import Asset, AssetClass, Currency
 
 VALID = """
 assets:
@@ -57,3 +63,83 @@ class TestYamlAssetCatalog:
     def test_missing_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(AssetConfigError):
             YamlAssetCatalog(tmp_path / "nope.yaml").get("KRX:005930")
+
+
+class TestUpdateAsset:
+    def test_replaces_matching_entry(self, tmp_path: Path) -> None:
+        path = write(tmp_path, VALID)
+        update_asset(
+            path,
+            "KRX:005930",
+            Asset(
+                asset_id="KRX:005930",
+                name="삼성전자우",
+                asset_class=AssetClass.DOMESTIC_STOCK,
+                currency=Currency.KRW,
+                country="KR",
+            ),
+        )
+        catalog = YamlAssetCatalog(path)
+        samsung = catalog.get("KRX:005930")
+        assert samsung is not None and samsung.name == "삼성전자우"
+        assert catalog.get("NASDAQ:AAPL") is not None  # 다른 항목은 그대로
+
+    def test_unknown_asset_id_rejected(self, tmp_path: Path) -> None:
+        path = write(tmp_path, VALID)
+        with pytest.raises(AssetConfigError, match="찾을 수 없다"):
+            update_asset(
+                path,
+                "NOPE",
+                Asset(
+                    asset_id="NOPE",
+                    name="X",
+                    asset_class=AssetClass.DOMESTIC_STOCK,
+                    currency=Currency.KRW,
+                    country="KR",
+                ),
+            )
+
+
+class TestDeleteAsset:
+    def test_removes_matching_entry(self, tmp_path: Path) -> None:
+        path = write(tmp_path, VALID)
+        delete_asset(path, "KRX:005930")
+        catalog = YamlAssetCatalog(path)
+        assert catalog.get("KRX:005930") is None
+        assert catalog.get("NASDAQ:AAPL") is not None
+
+    def test_unknown_asset_id_rejected(self, tmp_path: Path) -> None:
+        path = write(tmp_path, VALID)
+        with pytest.raises(AssetConfigError, match="찾을 수 없다"):
+            delete_asset(path, "NOPE")
+
+
+class TestAppendAsset:
+    def test_appends_new_entry(self, tmp_path: Path) -> None:
+        path = write(tmp_path, VALID)
+        append_asset(
+            path,
+            Asset(
+                asset_id="NASDAQ:NVDA",
+                name="엔비디아",
+                asset_class=AssetClass.US_STOCK,
+                currency=Currency.USD,
+                country="US",
+            ),
+        )
+        catalog = YamlAssetCatalog(path)
+        assert catalog.get("NASDAQ:NVDA") is not None
+
+    def test_rejects_duplicate(self, tmp_path: Path) -> None:
+        path = write(tmp_path, VALID)
+        with pytest.raises(AssetConfigError, match="이미 등록"):
+            append_asset(
+                path,
+                Asset(
+                    asset_id="KRX:005930",
+                    name="삼성전자",
+                    asset_class=AssetClass.DOMESTIC_STOCK,
+                    currency=Currency.KRW,
+                    country="KR",
+                ),
+            )

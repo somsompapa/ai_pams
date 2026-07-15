@@ -48,6 +48,25 @@ def save_price_trigger(path: Path, trigger: PriceTrigger) -> None:
     path.write_text(_TRIGGER_HEADER + body, encoding="utf-8")
 
 
+def delete_price_trigger(path: Path, asset_id: str) -> None:
+    """asset_id의 가격 트리거를 제거한다. 없으면 실패."""
+    entries: list[dict[str, str]] = []
+    if path.exists():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = document.get("triggers", []) if isinstance(document, dict) else []
+        entries = [e for e in raw if isinstance(e, dict)]
+
+    remaining = [e for e in entries if e.get("asset_id") != asset_id]
+    if len(remaining) == len(entries):
+        raise PriceTriggerConfigError(f"asset_id '{asset_id}'의 트리거를 찾을 수 없다")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = yaml.safe_dump(
+        {"triggers": remaining}, allow_unicode=True, sort_keys=False, default_flow_style=False
+    )
+    path.write_text(_TRIGGER_HEADER + body, encoding="utf-8")
+
+
 class YamlPriceTriggerLoader:
     def __init__(self, path: Path) -> None:
         self._path = path

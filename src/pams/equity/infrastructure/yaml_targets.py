@@ -10,9 +10,60 @@ import yaml
 from pams.equity.domain import StockTarget, StockTargetPlan
 from pams.shared_kernel.domain import DomainError, Percentage
 
+_TARGET_HEADER = (
+    "# 종목별 목표비중 · 매수/매도 트리거 (Tier 2 — 대시보드에서 관리됨)\n"
+    "# 주식 슬리브(국내주식+미국주식) 안에서 종목별 목표비중과 밴드를 정한다.\n"
+)
+
 
 class StockTargetConfigError(Exception):
     """종목 목표 설정 파일을 StockTargetPlan으로 변환하는 데 실패했다."""
+
+
+def save_stock_target(path: Path, target: StockTarget) -> None:
+    """종목 목표 한 건을 upsert 한다(같은 asset_id는 교체). 파일이 없으면 만든다.
+
+    도메인 StockTarget으로 이미 검증된 값만 받으므로 여기서는 직렬화만 한다.
+    """
+    entries: list[dict[str, str]] = []
+    if path.exists():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = document.get("targets", []) if isinstance(document, dict) else []
+        entries = [e for e in raw if isinstance(e, dict) and e.get("asset_id") != target.asset_id]
+
+    entries.append(
+        {
+            "asset_id": target.asset_id,
+            "target_percent": str(target.target.as_percent),
+            "buy_band": str(target.buy_band.as_percent),
+            "sell_band": str(target.sell_band.as_percent),
+        }
+    )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = yaml.safe_dump(
+        {"targets": entries}, allow_unicode=True, sort_keys=False, default_flow_style=False
+    )
+    path.write_text(_TARGET_HEADER + body, encoding="utf-8")
+
+
+def delete_stock_target(path: Path, asset_id: str) -> None:
+    """asset_id의 종목 목표를 제거한다. 없으면 실패."""
+    entries: list[dict[str, str]] = []
+    if path.exists():
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = document.get("targets", []) if isinstance(document, dict) else []
+        entries = [e for e in raw if isinstance(e, dict)]
+
+    remaining = [e for e in entries if e.get("asset_id") != asset_id]
+    if len(remaining) == len(entries):
+        raise StockTargetConfigError(f"asset_id '{asset_id}'의 종목 목표를 찾을 수 없다")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = yaml.safe_dump(
+        {"targets": remaining}, allow_unicode=True, sort_keys=False, default_flow_style=False
+    )
+    path.write_text(_TARGET_HEADER + body, encoding="utf-8")
 
 
 class YamlStockTargetLoader:

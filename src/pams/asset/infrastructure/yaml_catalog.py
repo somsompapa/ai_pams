@@ -17,18 +17,21 @@ class AssetConfigError(Exception):
     """자산 카탈로그 파일을 읽는 데 실패했다."""
 
 
-def append_asset(path: Path, asset: Asset) -> None:
-    """자산 마스터에 새 종목 한 건을 추가한다(같은 asset_id가 있으면 거부).
-
-    도메인 Asset으로 이미 검증된 값만 받는다. 기존 목록은 유지하고 추가만 한다.
-    """
+def _read_entries(path: Path) -> list[dict[str, str]]:
     document = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else None
-    assets = (
-        list(document["assets"]) if isinstance(document, dict) and document.get("assets") else []
-    )
-    if any(isinstance(e, dict) and e.get("asset_id") == asset.asset_id for e in assets):
-        raise AssetConfigError(f"이미 등록된 asset_id '{asset.asset_id}'")
+    return list(document["assets"]) if isinstance(document, dict) and document.get("assets") else []
 
+
+def _write_entries(path: Path, entries: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = "# 자산 마스터 데이터 (대시보드에서 관리됨)\n"
+    body = yaml.safe_dump(
+        {"assets": entries}, allow_unicode=True, sort_keys=False, default_flow_style=False
+    )
+    path.write_text(header + body, encoding="utf-8")
+
+
+def _to_entry(asset: Asset) -> dict[str, str]:
     entry: dict[str, str] = {
         "asset_id": asset.asset_id,
         "name": asset.name,
@@ -38,14 +41,41 @@ def append_asset(path: Path, asset: Asset) -> None:
     }
     if asset.sector is not None:
         entry["sector"] = asset.sector
-    assets.append(entry)
+    return entry
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    header = "# 자산 마스터 데이터 (대시보드에서 관리됨)\n"
-    body = yaml.safe_dump(
-        {"assets": assets}, allow_unicode=True, sort_keys=False, default_flow_style=False
-    )
-    path.write_text(header + body, encoding="utf-8")
+
+def append_asset(path: Path, asset: Asset) -> None:
+    """자산 마스터에 새 종목 한 건을 추가한다(같은 asset_id가 있으면 거부).
+
+    도메인 Asset으로 이미 검증된 값만 받는다. 기존 목록은 유지하고 추가만 한다.
+    """
+    entries = _read_entries(path)
+    if any(isinstance(e, dict) and e.get("asset_id") == asset.asset_id for e in entries):
+        raise AssetConfigError(f"이미 등록된 asset_id '{asset.asset_id}'")
+    entries.append(_to_entry(asset))
+    _write_entries(path, entries)
+
+
+def update_asset(path: Path, asset_id: str, asset: Asset) -> None:
+    """asset_id에 해당하는 자산을 새 내용으로 교체한다. 없으면 실패."""
+    entries = _read_entries(path)
+    if not any(isinstance(e, dict) and e.get("asset_id") == asset_id for e in entries):
+        raise AssetConfigError(f"asset_id '{asset_id}'를 찾을 수 없다")
+    if asset.asset_id != asset_id and any(
+        isinstance(e, dict) and e.get("asset_id") == asset.asset_id for e in entries
+    ):
+        raise AssetConfigError(f"이미 등록된 asset_id '{asset.asset_id}'")
+    updated = [_to_entry(asset) if e.get("asset_id") == asset_id else e for e in entries]
+    _write_entries(path, updated)
+
+
+def delete_asset(path: Path, asset_id: str) -> None:
+    """asset_id에 해당하는 자산을 제거한다. 없으면 실패."""
+    entries = _read_entries(path)
+    remaining = [e for e in entries if not (isinstance(e, dict) and e.get("asset_id") == asset_id)]
+    if len(remaining) == len(entries):
+        raise AssetConfigError(f"asset_id '{asset_id}'를 찾을 수 없다")
+    _write_entries(path, remaining)
 
 
 class YamlAssetCatalog:

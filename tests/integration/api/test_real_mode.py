@@ -476,6 +476,209 @@ class TestBulkTriggers:
         assert response.status_code == 400
 
 
+class TestAssetListEditDelete:
+    def _client(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        monkeypatch.setenv("PAMS_MODE", "real")
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            recorder.execute(as_of=day, base_currency=Currency.KRW)
+        service = real_dashboard_service(project_root)
+        return TestClient(
+            create_app(service, data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+
+    def test_list_assets_returns_all(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.get("/api/assets")
+        assert response.status_code == 200
+        ids = {a["asset_id"] for a in response.json()["assets"]}
+        assert {"KRX:005930", "KRX:114260"} <= ids
+
+    def test_edit_asset_updates_entry(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.put(
+            "/api/assets/KRX:069500",
+            json={
+                "asset_id": "KRX:069500",
+                "name": "KODEX 200 (수정됨)",
+                "asset_class": "etf",
+                "currency": "KRW",
+                "country": "KR",
+            },
+        )
+        assert response.status_code == 200
+        assets_yaml = (project_root / "config" / "assets" / "default.yaml").read_text("utf-8")
+        assert "KODEX 200 (수정됨)" in assets_yaml
+
+    def test_edit_unknown_asset_rejected(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.put(
+            "/api/assets/NOPE",
+            json={
+                "asset_id": "NOPE",
+                "name": "X",
+                "asset_class": "etf",
+                "currency": "KRW",
+                "country": "KR",
+            },
+        )
+        assert response.status_code == 400
+
+    def test_delete_asset_without_transactions_succeeds(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.delete("/api/assets/KRX:069500")
+        assert response.status_code == 204
+        assets_yaml = (project_root / "config" / "assets" / "default.yaml").read_text("utf-8")
+        assert "KRX:069500" not in assets_yaml
+
+    def test_delete_asset_with_transactions_rejected(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        # KRX:005930은 거래내역(t2)이 있어 삭제 불가
+        response = client.delete("/api/assets/KRX:005930")
+        assert response.status_code == 400
+        assets_yaml = (project_root / "config" / "assets" / "default.yaml").read_text("utf-8")
+        assert "KRX:005930" in assets_yaml
+
+    def test_demo_mode_blocks_asset_endpoints(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PAMS_MODE", "demo")
+        client = TestClient(
+            create_app(data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+        assert client.get("/api/assets").status_code == 400
+        assert client.delete("/api/assets/KRX:069500").status_code == 400
+
+
+class TestTriggerDelete:
+    def _client(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        monkeypatch.setenv("PAMS_MODE", "real")
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            recorder.execute(as_of=day, base_currency=Currency.KRW)
+        service = real_dashboard_service(project_root)
+        return TestClient(
+            create_app(service, data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+
+    def test_delete_removes_saved_trigger(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        client.post(
+            "/api/triggers",
+            json={"asset_id": "KRX:005930", "currency": "KRW", "buy_at": "70000"},
+        )
+        response = client.delete("/api/triggers/KRX:005930")
+        assert response.status_code == 204
+        service = real_dashboard_service(project_root)
+        data = service.build(as_of=AS_OF, base_currency=Currency.KRW)
+        samsung = next(s for s in data["stocks"] if s["asset_id"] == "KRX:005930")
+        assert samsung["signal"] == "none"
+
+    def test_delete_unknown_trigger_rejected(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.delete("/api/triggers/KRX:114260")
+        assert response.status_code == 400
+
+    def test_demo_mode_blocks_trigger_delete(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PAMS_MODE", "demo")
+        client = TestClient(
+            create_app(data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+        assert client.delete("/api/triggers/KRX:005930").status_code == 400
+
+
+class TestStockTargets:
+    def _client(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        monkeypatch.setenv("PAMS_MODE", "real")
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            recorder.execute(as_of=day, base_currency=Currency.KRW)
+        service = real_dashboard_service(project_root)
+        return TestClient(
+            create_app(service, data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+
+    def test_list_returns_configured_targets(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.get("/api/stock-targets")
+        assert response.status_code == 200
+        ids = {t["asset_id"] for t in response.json()["targets"]}
+        assert "KRX:005930" in ids
+
+    def test_save_upserts_target(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.post(
+            "/api/stock-targets",
+            json={
+                "asset_id": "KRX:114260",
+                "target_percent": "30",
+                "buy_band": "5",
+                "sell_band": "5",
+            },
+        )
+        assert response.status_code == 201
+        yaml_text = (project_root / "config" / "stock_targets" / "default.yaml").read_text("utf-8")
+        assert "KRX:114260" in yaml_text
+
+    def test_save_rejects_invalid_percent(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.post(
+            "/api/stock-targets",
+            json={
+                "asset_id": "KRX:114260",
+                "target_percent": "not-a-number",
+                "buy_band": "5",
+                "sell_band": "5",
+            },
+        )
+        assert response.status_code == 400
+
+    def test_delete_removes_target(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.delete("/api/stock-targets/KRX:005930")
+        assert response.status_code == 204
+        yaml_text = (project_root / "config" / "stock_targets" / "default.yaml").read_text("utf-8")
+        assert "KRX:005930" not in yaml_text
+
+    def test_delete_unknown_target_rejected(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        response = client.delete("/api/stock-targets/NOPE")
+        assert response.status_code == 400
+
+    def test_demo_mode_blocks_stock_targets(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PAMS_MODE", "demo")
+        client = TestClient(
+            create_app(data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+        assert client.get("/api/stock-targets").status_code == 400
+
+
 class TestCli:
     def test_snapshot_command(self, project_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from pams.interfaces.cli.__main__ import main

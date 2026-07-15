@@ -264,7 +264,7 @@
       <div id="bt-result"></div>
     </details>
     <details class="sub-form">
-      <summary>＋ 새 종목 추가</summary>
+      <summary>＋ 종목 관리 (추가·수정·삭제)</summary>
       <form id="asset-form" class="tx-form">
         <input id="as-id" placeholder="종목코드 (예: NASDAQ:NVDA)" required>
         <input id="as-name" placeholder="이름 (예: 엔비디아)" required>
@@ -288,15 +288,34 @@
         </select>
         <input id="as-country" placeholder="국가 (예: KR, US)" value="KR" required>
         <input id="as-yahoo" placeholder="Yahoo 심볼 (예: NVDA, 005930.KS)">
-        <button type="submit">종목 추가</button>
+        <input type="hidden" id="as-edit-id" value="">
+        <button type="submit" id="as-submit-btn">종목 추가</button>
+        <button type="button" id="as-cancel-btn" style="display:none">취소</button>
       </form>
       <p id="as-msg" class="empty">추가하면 거래 입력·시세 자동수집에서 이 종목을 쓸 수 있다.</p>
+      <div class="holdings-scroll"><table id="asset-table"></table></div>
     </details>
   </section>
   <section class="card" data-tab="portfolio"><h2>자산군 비중</h2><div id="w-asset"></div></section>
   <section class="card" data-tab="portfolio"><h2>목표비중 대비 (허용밴드 ±)</h2><div id="targets"></div></section>
   <section class="card" data-tab="portfolio"><h2>국가 비중</h2><div id="w-country"></div></section>
   <section class="card" data-tab="portfolio"><h2>통화 비중</h2><div id="w-currency"></div></section>
+  <section class="card wide" data-tab="portfolio">
+    <h2>종목별 목표비중 (Tier 2 — 주식 슬리브 내 배분)</h2>
+    <div class="holdings-scroll"><table id="stock-target-table"></table></div>
+    <p id="stock-target-note" class="empty"></p>
+    <details class="sub-form">
+      <summary>＋ 종목 목표비중 설정</summary>
+      <form id="stock-target-form" class="tx-form">
+        <input id="st-asset" list="asset-options" placeholder="종목 (예: KRX:005930)" required>
+        <input id="st-target" placeholder="목표비중(슬리브 대비 %)" inputmode="decimal" required>
+        <input id="st-buy-band" placeholder="매수 밴드(%)" inputmode="decimal" required>
+        <input id="st-sell-band" placeholder="매도 밴드(%)" inputmode="decimal" required>
+        <button type="submit">목표비중 저장</button>
+      </form>
+      <p id="st-msg" class="empty">매수 트리거 = 목표−매수밴드(이하면 매수) · 매도 트리거 = 목표+매도밴드(이상이면 매도)</p>
+    </details>
+  </section>
 
   <section class="card" data-tab="analysis"><h2>리스크 지표</h2><div class="grid2" id="risk"></div></section>
   <section class="card" data-tab="analysis"><h2>알림</h2><div id="alerts"></div></section>
@@ -427,7 +446,7 @@ async function load() {
   el("stocks-table").innerHTML = stocks.length
     ? `<thead><tr>
          <th>종목</th><th class="num">수량</th><th class="num">평단가</th><th class="num">현재가</th>
-         <th class="num">평가손익</th><th class="num">매수선↓</th><th class="num">익절선↑</th><th class="num">손절선↓</th><th>신호</th><th class="num">비중</th>
+         <th class="num">평가손익</th><th class="num">매수선↓</th><th class="num">익절선↑</th><th class="num">손절선↓</th><th>신호</th><th class="num">비중</th><th></th>
        </tr></thead>
        <tbody>${stocks.map((s) => `
          <tr>
@@ -441,11 +460,65 @@ async function load() {
            <td class="num">${esc(s.stop_loss)}</td>
            <td><span class="badge ${{buy:"buy",sell:"sell",hold:"hold",none:"hold"}[s.signal] || "hold"}">${esc(s.signal_label)}</span></td>
            <td class="num">${esc(s.weight)}%</td>
+           <td>${s.signal !== "none" ? `<button type="button" class="trigger-delete" data-id="${esc(s.asset_id)}">트리거 삭제</button>` : ""}</td>
          </tr>`).join("")}</tbody>`
     : '<tbody><tr><td class="empty">보유 주식 종목이 없다.</td></tr></tbody>';
 
+  el("stocks-table").querySelectorAll(".trigger-delete").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      if (!confirm(btn.dataset.id + "의 가격 트리거를 삭제할까?")) return;
+      const response = await fetch("/api/triggers/" + encodeURIComponent(btn.dataset.id), {
+        method: "DELETE",
+      });
+      if (response.ok) {
+        load();
+        loadAudit();
+      } else {
+        const body = await response.json().catch(() => ({}));
+        alert("삭제 실패: " + (body.detail ?? response.status));
+      }
+    }));
+
   const assetOpts = (d.holdings || []).map((h) => `<option value="${esc(h.asset_id)}">${esc(h.name)}</option>`);
   el("asset-options").innerHTML = assetOpts.join("");
+
+  const alloc = d.stock_allocation || { rows: [] };
+  const allocRows = alloc.rows || [];
+  el("stock-target-note").textContent = alloc.configured === false
+    ? "※ 종목별 목표비중이 설정되지 않아 현재비중을 목표로 자동 생성했다(밴드 ±5%p, 전부 유지 상태)."
+    : "";
+  el("stock-target-table").innerHTML = allocRows.length
+    ? `<thead><tr>
+         <th>종목</th><th class="num">현재비중</th><th class="num">목표비중</th>
+         <th class="num">매수↓</th><th class="num">매도↑</th><th>신호</th><th class="num">조정필요액</th><th></th>
+       </tr></thead>
+       <tbody>${allocRows.map((r) => `
+         <tr>
+           <td><strong>${esc(r.name)}</strong><br><span class="empty">${esc(r.asset_id)}</span></td>
+           <td class="num">${esc(r.current_weight)}%</td>
+           <td class="num">${esc(r.target)}${r.target !== "-" ? "%" : ""}</td>
+           <td class="num">${esc(r.buy_trigger)}${r.buy_trigger !== "-" ? "%" : ""}</td>
+           <td class="num">${esc(r.sell_trigger)}${r.sell_trigger !== "-" ? "%" : ""}</td>
+           <td><span class="badge ${{buy:"buy",sell:"sell",hold:"hold"}[r.signal] || "hold"}">${esc(r.signal_label)}</span></td>
+           <td class="num ${r.adjust_positive ? "pnl-up" : "pnl-down"}">${esc(r.adjust_amount)}</td>
+           <td>${r.target !== "-" ? `<button type="button" class="stock-target-delete" data-id="${esc(r.asset_id)}">목표 삭제</button>` : ""}</td>
+         </tr>`).join("")}</tbody>`
+    : '<tbody><tr><td class="empty">주식 슬리브 보유가 없다.</td></tr></tbody>';
+
+  el("stock-target-table").querySelectorAll(".stock-target-delete").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      if (!confirm(btn.dataset.id + "의 목표비중을 삭제할까?")) return;
+      const response = await fetch("/api/stock-targets/" + encodeURIComponent(btn.dataset.id), {
+        method: "DELETE",
+      });
+      if (response.ok) {
+        load();
+        loadAudit();
+      } else {
+        const body = await response.json().catch(() => ({}));
+        alert("삭제 실패: " + (body.detail ?? response.status));
+      }
+    }));
 
   el("risk").innerHTML = d.risk.map((m) => `
     <div class="metric"><div class="label">${esc(m.label)}</div><div class="value">${esc(m.value)}</div></div>`).join("");
@@ -765,16 +838,129 @@ guardSubmit(el("bulk-trigger-form"), async () => {
   }
 });
 
+function resetAssetEditMode() {
+  el("as-edit-id").value = "";
+  el("as-submit-btn").textContent = "종목 추가";
+  el("as-cancel-btn").style.display = "none";
+}
+el("as-cancel-btn").addEventListener("click", () => {
+  el("asset-form").reset();
+  resetAssetEditMode();
+});
+
+const assetClassLabel = {
+  domestic_stock: "국내주식", us_stock: "미국주식", etf: "ETF", bond: "채권", gold: "금",
+  cash: "현금", deposit: "예수금", foreign_currency: "외화", pension: "연금",
+  savings: "청약·저축", crypto: "가상자산",
+};
+
+async function loadAssets() {
+  const response = await fetch("/api/assets");
+  if (!response.ok) return;
+  const { assets } = await response.json();
+
+  el("asset-table").innerHTML = assets.length
+    ? `<thead><tr><th>종목코드</th><th>이름</th><th>자산군</th><th>통화</th><th>국가</th><th></th></tr></thead>
+       <tbody>${assets.map((a) => `
+         <tr>
+           <td>${esc(a.asset_id)}</td>
+           <td>${esc(a.name)}</td>
+           <td>${esc(assetClassLabel[a.asset_class] || a.asset_class)}</td>
+           <td>${esc(a.currency)}</td>
+           <td>${esc(a.country)}</td>
+           <td>
+             <button type="button" class="asset-edit" data-id="${esc(a.asset_id)}">수정</button>
+             <button type="button" class="asset-delete" data-id="${esc(a.asset_id)}">삭제</button>
+           </td>
+         </tr>`).join("")}</tbody>`
+    : '<tbody><tr><td class="empty">등록된 종목이 없다.</td></tr></tbody>';
+
+  el("asset-table").querySelectorAll(".asset-edit").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const a = assets.find((x) => x.asset_id === btn.dataset.id);
+      if (!a) return;
+      el("as-id").value = a.asset_id;
+      el("as-name").value = a.name;
+      el("as-class").value = a.asset_class;
+      el("as-currency").value = a.currency;
+      el("as-country").value = a.country;
+      el("as-yahoo").value = "";
+      el("as-edit-id").value = a.asset_id;
+      el("as-submit-btn").textContent = "수정 저장";
+      el("as-cancel-btn").style.display = "";
+      el("asset-form").scrollIntoView({ behavior: "smooth", block: "center" });
+    }));
+
+  el("asset-table").querySelectorAll(".asset-delete").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      if (!confirm(btn.dataset.id + "을(를) 삭제할까? 거래 내역이 있으면 삭제되지 않는다.")) return;
+      const response = await fetch("/api/assets/" + encodeURIComponent(btn.dataset.id), {
+        method: "DELETE",
+      });
+      if (response.ok) {
+        loadAssets();
+      } else {
+        const body = await response.json().catch(() => ({}));
+        alert("삭제 실패: " + (body.detail ?? response.status));
+      }
+    }));
+}
+
 guardSubmit(el("asset-form"), async () => {
-  const ok = await postConfig("/api/assets", {
+  const payload = {
     asset_id: el("as-id").value,
     name: el("as-name").value,
     asset_class: el("as-class").value,
     currency: el("as-currency").value,
     country: el("as-country").value,
     yahoo_symbol: el("as-yahoo").value || null,
-  }, "as-msg");
-  if (ok) el("asset-form").reset();
+  };
+  const editId = el("as-edit-id").value;
+  const response = await fetch(
+    editId ? "/api/assets/" + encodeURIComponent(editId) : "/api/assets",
+    {
+      method: editId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }
+  );
+  const msg = el("as-msg");
+  msg.className = "";
+  if (response.ok) {
+    el("asset-form").reset();
+    resetAssetEditMode();
+    msg.textContent = (editId ? "✅ 수정 완료" : "✅ 추가 완료") + " — 다시 계산 중…";
+    load();
+    loadAssets();
+    loadAudit();
+  } else {
+    const body = await response.json().catch(() => ({}));
+    msg.textContent = (editId ? "수정 실패: " : "추가 실패: ") + (body.detail ?? response.status);
+  }
+});
+
+guardSubmit(el("stock-target-form"), async () => {
+  const response = await fetch("/api/stock-targets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      asset_id: el("st-asset").value,
+      target_percent: el("st-target").value,
+      buy_band: el("st-buy-band").value,
+      sell_band: el("st-sell-band").value,
+    }),
+  });
+  const msg = el("st-msg");
+  msg.className = "";
+  if (response.ok) {
+    el("stock-target-form").reset();
+    msg.textContent = "✅ 저장 완료 — 다시 계산 중…";
+    load();
+    loadAudit();
+  } else {
+    const body = await response.json().catch(() => ({}));
+    msg.textContent = "저장 실패: " + (body.detail ?? response.status);
+  }
 });
 
 guardSubmit(el("journal-form"), async () => {
@@ -830,6 +1016,7 @@ async function loadAudit() {
 
 load();
 loadTransactions();
+loadAssets();
 loadJournal();
 loadAudit();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");

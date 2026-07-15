@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from pams.equity.infrastructure import StockTargetConfigError, YamlStockTargetLoader
+from pams.equity.domain import StockTarget
+from pams.equity.infrastructure import (
+    StockTargetConfigError,
+    YamlStockTargetLoader,
+    delete_stock_target,
+    save_stock_target,
+)
 from pams.shared_kernel.domain import Percentage
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -69,3 +75,115 @@ targets:
     band: "3"
 """,
             )
+
+
+class TestSaveStockTarget:
+    def test_create_file_and_add(self, tmp_path: Path) -> None:
+        path = tmp_path / "targets.yaml"
+        save_stock_target(
+            path,
+            StockTarget(
+                asset_id="KRX:005930",
+                target=Percentage.from_percent("40"),
+                buy_band=Percentage.from_percent("8"),
+                sell_band=Percentage.from_percent("10"),
+            ),
+        )
+        plan = YamlStockTargetLoader(path).load()
+        t = plan.target_for("KRX:005930")
+        assert t is not None
+        assert t.target == Percentage.from_percent("40")
+        assert t.buy_band == Percentage.from_percent("8")
+        assert t.sell_band == Percentage.from_percent("10")
+
+    def test_upsert_replaces_existing(self, tmp_path: Path) -> None:
+        path = tmp_path / "targets.yaml"
+        save_stock_target(
+            path,
+            StockTarget(
+                asset_id="KRX:005930",
+                target=Percentage.from_percent("40"),
+                buy_band=Percentage.from_percent("8"),
+                sell_band=Percentage.from_percent("8"),
+            ),
+        )
+        save_stock_target(
+            path,
+            StockTarget(
+                asset_id="KRX:005930",
+                target=Percentage.from_percent("50"),
+                buy_band=Percentage.from_percent("5"),
+                sell_band=Percentage.from_percent("5"),
+            ),
+        )
+        plan = YamlStockTargetLoader(path).load()
+        assert len([t for t in plan.targets if t.asset_id == "KRX:005930"]) == 1
+        t = plan.target_for("KRX:005930")
+        assert t is not None and t.target == Percentage.from_percent("50")
+
+    def test_keeps_other_targets(self, tmp_path: Path) -> None:
+        path = tmp_path / "targets.yaml"
+        save_stock_target(
+            path,
+            StockTarget(
+                asset_id="KRX:005930",
+                target=Percentage.from_percent("40"),
+                buy_band=Percentage.from_percent("8"),
+                sell_band=Percentage.from_percent("8"),
+            ),
+        )
+        save_stock_target(
+            path,
+            StockTarget(
+                asset_id="NASDAQ:AAPL",
+                target=Percentage.from_percent("60"),
+                buy_band=Percentage.from_percent("8"),
+                sell_band=Percentage.from_percent("8"),
+            ),
+        )
+        plan = YamlStockTargetLoader(path).load()
+        assert {t.asset_id for t in plan.targets} == {"KRX:005930", "NASDAQ:AAPL"}
+
+
+class TestDeleteStockTarget:
+    def test_removes_matching_target(self, tmp_path: Path) -> None:
+        path = tmp_path / "targets.yaml"
+        save_stock_target(
+            path,
+            StockTarget(
+                asset_id="KRX:005930",
+                target=Percentage.from_percent("40"),
+                buy_band=Percentage.from_percent("8"),
+                sell_band=Percentage.from_percent("8"),
+            ),
+        )
+        save_stock_target(
+            path,
+            StockTarget(
+                asset_id="NASDAQ:AAPL",
+                target=Percentage.from_percent("60"),
+                buy_band=Percentage.from_percent("8"),
+                sell_band=Percentage.from_percent("8"),
+            ),
+        )
+        delete_stock_target(path, "KRX:005930")
+        plan = YamlStockTargetLoader(path).load()
+        assert {t.asset_id for t in plan.targets} == {"NASDAQ:AAPL"}
+
+    def test_unknown_asset_id_rejected(self, tmp_path: Path) -> None:
+        path = tmp_path / "targets.yaml"
+        save_stock_target(
+            path,
+            StockTarget(
+                asset_id="KRX:005930",
+                target=Percentage.from_percent("40"),
+                buy_band=Percentage.from_percent("8"),
+                sell_band=Percentage.from_percent("8"),
+            ),
+        )
+        with pytest.raises(StockTargetConfigError, match="찾을 수 없다"):
+            delete_stock_target(path, "NOPE")
+
+    def test_missing_file_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(StockTargetConfigError, match="찾을 수 없다"):
+            delete_stock_target(tmp_path / "nope.yaml", "KRX:005930")

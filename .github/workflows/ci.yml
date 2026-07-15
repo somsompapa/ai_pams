@@ -33,3 +33,11 @@ jobs:
 
       - name: Test (pytest)
         run: pytest -q
+
+  deploy:
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: self-hosted
+    steps:
+      - name: Deploy to server
+        run: bash ~/ai_pams/deploy/ci-deploy.sh

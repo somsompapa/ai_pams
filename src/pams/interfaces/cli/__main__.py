@@ -23,8 +23,8 @@
       환경변수 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID 필요.
 
   signals [--date YYYY-MM-DD] [--root DIR]
-      '오늘의 액션'(가격 트리거·DCA·리밸런싱)을 텔레그램으로 보낸다.
-      가격 트리거·리밸런싱은 새로 발동한 것만, DCA는 매일 알린다(중복 방지).
+      '오늘의 액션'(가격 트리거·리밸런싱)을 텔레그램으로 보낸다.
+      새로 발동한 신호만 알린다(중복 방지). DCA는 이미 정해진 일정이라 제외.
       환경변수 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID 필요.
 """
 
@@ -182,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         ("dca", "오늘 매수 예정인 DCA 주문 목록"),
         ("report", "투자 보고서 생성 (reports/)"),
         ("alert", "규칙 발동 시 텔레그램 알림"),
-        ("signals", "오늘의 액션(트리거·DCA·리밸런싱) 텔레그램 알림"),
+        ("signals", "오늘의 액션(가격 트리거·리밸런싱) 텔레그램 알림"),
     ):
         sub = subcommands.add_parser(name, help=description)
         sub.add_argument("--date", dest="as_of", default=None, help="YYYY-MM-DD (기본: 오늘)")

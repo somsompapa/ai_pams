@@ -63,7 +63,7 @@ def select_new_signals(
     actions: Sequence[dict[str, Any]], previous_keys: set[str]
 ) -> list[dict[str, Any]]:
     """알릴 신호를 고른다. persistent(트리거·리밸런싱)는 이전에 없던 것만,
-    나머지(DCA)는 매일 포함한다.
+    그 외 신호원은 매일 포함한다.
     """
     selected = []
     for action in actions:
@@ -119,8 +119,8 @@ def run_signal_alert(
 ) -> bool:
     """오늘의 액션 중 알릴 것을 골라 전송한다. 보냈으면 True.
 
-    persistent 신호는 새로 발동한 것만, DCA는 매일 알린다. 발동 상태는
-    store에 저장해 다음 실행에서 같은 신호를 반복 알리지 않는다.
+    persistent 신호(가격 트리거·리밸런싱)는 새로 발동한 것만 알린다. 발동
+    상태는 store에 저장해 다음 실행에서 같은 신호를 반복 알리지 않는다.
     """
     to_send = select_new_signals(actions, store.load())
     store.save(active_persistent_keys(actions))

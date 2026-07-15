@@ -84,8 +84,9 @@ class JournalRequest(BaseModel):
 
 
 class AnalysisRequest(BaseModel):
-    kind: Literal["summary", "risk", "market", "journal_draft"]
+    kind: Literal["summary", "risk", "market", "journal_draft", "stock_trigger"]
     note: str | None = None
+    asset_id: str | None = None  # kind == stock_trigger일 때 필수
 
 
 class TransactionRequest(BaseModel):
@@ -245,6 +246,25 @@ def _facts_from_dashboard(data: dict[str, Any]) -> list[str]:
     else:
         facts.append("리밸런싱: 모든 자산군이 허용밴드 안에 있어 불필요")
     return facts
+
+
+def _facts_for_stock(data: dict[str, Any], asset_id: str) -> list[str]:
+    """특정 종목의 매수/익절/손절 트리거 상태만 뽑은 사실 목록."""
+    stock = next((s for s in data["stocks"] if s["asset_id"] == asset_id), None)
+    if stock is None:
+        raise HTTPException(status_code=400, detail=f"보유 중인 주식 종목이 아니다: {asset_id}")
+    return [
+        f"기준일: {data['as_of']}",
+        f"종목: {stock['name']} ({stock['asset_id']})",
+        f"보유수량: {stock['quantity']}",
+        f"평단가: {stock['avg_price']}",
+        f"현재가: {stock['current_price']}",
+        f"평가손익: {stock['unrealized_pnl']} ({stock['unrealized_percent']})",
+        f"매수선(이하로 내려가면 매수): {stock['buy_trigger']}",
+        f"익절선(이상으로 올라가면 매도): {stock['take_profit']}",
+        f"손절선(이하로 내려가면 매도): {stock['stop_loss']}",
+        f"현재 트리거 신호: {stock['signal_label']}",
+    ]
 
 
 def _authorized(header: str | None, password: str) -> bool:
@@ -914,10 +934,18 @@ def create_app(
                 ),
             )
         data = dashboard_service.build(as_of=as_of(), base_currency=Currency.KRW)
+        if request.kind == "stock_trigger":
+            if not request.asset_id or not request.asset_id.strip():
+                raise HTTPException(
+                    status_code=400, detail="종목 트리거 확인에는 asset_id가 필요하다"
+                )
+            facts = _facts_for_stock(data, request.asset_id.strip())
+        else:
+            facts = _facts_from_dashboard(data)
         try:
             narrative = GenerateAnalysis(completion=text_completion).execute(
                 kind=AnalysisKind(request.kind),
-                facts=_facts_from_dashboard(data),
+                facts=facts,
                 note=request.note,
             )
         except AnalysisProviderError as error:

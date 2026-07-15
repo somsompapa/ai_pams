@@ -20,7 +20,7 @@ _API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 class GeminiTextCompletion:
     api_key: str
     model: str = "gemini-2.0-flash"
-    max_tokens: int = 1024
+    max_tokens: int = 4096
     timeout_seconds: float = 30.0
     transport: httpx.BaseTransport | None = None  # 테스트에서 목킹 주입
 

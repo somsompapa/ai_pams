@@ -22,6 +22,7 @@ class AnalysisKind(StrEnum):
     RISK = "risk"  # 리스크 지표 해설
     MARKET = "market"  # 시장 지표가 포트폴리오에 미치는 영향 설명
     JOURNAL_DRAFT = "journal_draft"  # 투자일지 초안
+    STOCK_TRIGGER = "stock_trigger"  # 종목별 매수/익절/손절 트리거 확인
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,10 @@ _INSTRUCTIONS: dict[AnalysisKind, str] = {
     AnalysisKind.MARKET: "위 사실에 포함된 시장 지표가 이 포트폴리오에 미치는 영향을 설명하라.",
     AnalysisKind.JOURNAL_DRAFT: (
         "위 사실을 근거로 투자일지 초안을 작성하라. 무엇을/왜(규칙 근거)를 명확히 구분하라."
+    ),
+    AnalysisKind.STOCK_TRIGGER: (
+        "위 사실에 있는 이 종목의 매수선/익절선/손절선과 현재가·신호를 바탕으로 "
+        "지금 트리거 상태를 설명하라. 각 가격선까지 얼마나 남았는지, 신호가 발동했는지도 짚어라."
     ),
 }
 

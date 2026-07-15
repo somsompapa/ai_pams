@@ -379,7 +379,9 @@
         <option value="risk">리스크 설명</option>
         <option value="market">시장 영향</option>
         <option value="journal_draft">투자일지 초안</option>
+        <option value="stock_trigger">종목 트리거 확인</option>
       </select>
+      <select id="ai-stock" style="display:none"></select>
       <button id="ai-run" type="button">해설 생성</button>
     </div>
     <div id="ai-output" class="empty">아직 생성된 해설이 없다.</div>
@@ -474,6 +476,13 @@ function renderStocksTable() {
   el("stocks-note").textContent = stocks.some((s) => s.signal === "none")
     ? "※ 일부 종목은 가격 트리거 미설정 상태다. config/triggers로 매수/매도 가격선을 정하면 신호가 활성화된다."
     : "";
+
+  const aiStock = el("ai-stock");
+  const previous = aiStock.value;
+  aiStock.innerHTML = stocks
+    .map((s) => `<option value="${esc(s.asset_id)}">${esc(s.name)} (${esc(s.asset_id)})</option>`)
+    .join("");
+  if (stocks.some((s) => s.asset_id === previous)) aiStock.value = previous;
   el("stocks-table").innerHTML = stocks.length
     ? `<thead><tr>
          <th>종목</th><th class="num">수량</th><th class="num">평단가</th><th class="num">현재가</th>
@@ -1082,13 +1091,27 @@ guardSubmit(el("journal-form"), async () => {
   }
 });
 
+function syncAiStockVisibility() {
+  el("ai-stock").style.display = el("ai-kind").value === "stock_trigger" ? "" : "none";
+}
+el("ai-kind").addEventListener("change", syncAiStockVisibility);
+syncAiStockVisibility();
+
 el("ai-run").addEventListener("click", async () => {
+  const kind = el("ai-kind").value;
+  if (kind === "stock_trigger" && !el("ai-stock").value) {
+    el("ai-output").className = "empty";
+    el("ai-output").textContent = "종목을 먼저 선택하라.";
+    return;
+  }
   el("ai-output").className = "empty";
   el("ai-output").textContent = "생성 중…";
+  const payload = { kind };
+  if (kind === "stock_trigger") payload.asset_id = el("ai-stock").value;
   const response = await fetch("/api/analysis", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind: el("ai-kind").value }),
+    body: JSON.stringify(payload),
   });
   const body = await response.json().catch(() => ({}));
   if (response.ok) {

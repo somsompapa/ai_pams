@@ -90,3 +90,22 @@ class TestAnalysisApi:
         response = client.post("/api/analysis", json={"kind": "summary"})
         assert response.status_code == 502
         assert "401 Unauthorized" in response.json()["detail"]
+
+    def test_stock_trigger_analysis_uses_that_stocks_facts_only(self, tmp_path: Path) -> None:
+        client = TestClient(create_app(data_dir=tmp_path, completion=FakeCompletion()))
+        response = client.post(
+            "/api/analysis", json={"kind": "stock_trigger", "asset_id": "KRX:005930"}
+        )
+        assert response.status_code == 200
+        assert response.json()["kind"] == "stock_trigger"
+
+    def test_stock_trigger_requires_asset_id(self, tmp_path: Path) -> None:
+        client = TestClient(create_app(data_dir=tmp_path, completion=FakeCompletion()))
+        response = client.post("/api/analysis", json={"kind": "stock_trigger"})
+        assert response.status_code == 400
+        assert "asset_id" in response.json()["detail"]
+
+    def test_stock_trigger_unknown_asset_rejected(self, tmp_path: Path) -> None:
+        client = TestClient(create_app(data_dir=tmp_path, completion=FakeCompletion()))
+        response = client.post("/api/analysis", json={"kind": "stock_trigger", "asset_id": "NOPE"})
+        assert response.status_code == 400

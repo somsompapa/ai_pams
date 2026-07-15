@@ -23,7 +23,7 @@ class AnalysisProviderError(Exception):
 class AnthropicTextCompletion:
     api_key: str
     model: str
-    max_tokens: int = 1024
+    max_tokens: int = 4096
     timeout_seconds: float = 30.0
 
     def complete(self, *, system_prompt: str, user_prompt: str) -> str:

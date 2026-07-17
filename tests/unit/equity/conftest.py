@@ -8,14 +8,14 @@ from decimal import Decimal
 
 import pytest
 
-from pams.equity.domain.band_table import (
+from pams.equity.domain.scoring_config import EntryBarrierConfig, RiskConfig, ScoringConfig
+from pams.shared_kernel.domain import (
     Band,
     BandDirection,
     BandTable,
     CategoricalOption,
     CategoricalTable,
 )
-from pams.equity.domain.scoring_config import EntryBarrierConfig, RiskConfig, ScoringConfig
 
 
 def _cagr_10pt(metric: str) -> BandTable:

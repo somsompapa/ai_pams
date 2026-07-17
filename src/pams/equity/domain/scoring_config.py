@@ -9,8 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from pams.equity.domain.band_table import BandTable, CategoricalTable
-from pams.shared_kernel.domain import DomainValidationError
+from pams.shared_kernel.domain import BandTable, CategoricalTable, DomainValidationError
 
 
 @dataclass(frozen=True, slots=True)

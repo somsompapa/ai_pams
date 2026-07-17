@@ -8,15 +8,15 @@ from typing import Any
 
 import yaml
 
-from pams.equity.domain.band_table import (
+from pams.equity.domain.scoring_config import EntryBarrierConfig, RiskConfig, ScoringConfig
+from pams.shared_kernel.domain import (
     Band,
     BandDirection,
     BandTable,
     CategoricalOption,
     CategoricalTable,
+    DomainError,
 )
-from pams.equity.domain.scoring_config import EntryBarrierConfig, RiskConfig, ScoringConfig
-from pams.shared_kernel.domain import DomainError
 
 
 class ScoringConfigError(Exception):

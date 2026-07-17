@@ -88,6 +88,7 @@
   main.tab-manage section[data-tab="manage"],
   main.tab-analysis section[data-tab="analysis"],
   main.tab-equity section[data-tab="equity"],
+  main.tab-market-regime section[data-tab="market-regime"],
   main.tab-journal section[data-tab="journal"] { display: block; }
   .card.hero { border-color: color-mix(in srgb, var(--accent, #3b82f6) 40%, var(--line)); }
   .action-row {
@@ -172,6 +173,7 @@
   <button type="button" class="tab-btn" data-tab="manage">관리</button>
   <button type="button" class="tab-btn" data-tab="analysis">분석</button>
   <button type="button" class="tab-btn" data-tab="equity">종목분석</button>
+  <button type="button" class="tab-btn" data-tab="market-regime">시장국면</button>
   <button type="button" class="tab-btn" data-tab="journal">일지·AI</button>
 </nav>
 
@@ -449,6 +451,49 @@
       <button type="submit">점수 계산</button>
     </form>
     <div id="eq-output" class="empty">아직 계산 결과가 없다.</div>
+  </section>
+
+  <section class="card wide" data-tab="market-regime">
+    <h2>시장 국면 판정 (market_analysis_rules.md 4장)</h2>
+    <p class="empty" style="margin-top:0">
+      5개 지표를 다수결(동률이면 더 위험한 쪽 채택)로 A(강세)~E(위기) 등급을 매긴다.
+      3개 미만 입력되면 "판단 보류"로 응답한다(임의 등급 부여 금지). 매수 필수조건(5장)의
+      "시장 상태 C 이상" 판정 근거로 쓴다.
+    </p>
+    <form id="mr-form">
+      <div class="grid2">
+        <input id="mr-vix" placeholder="VIX 종가 (예: 22.4)">
+        <input id="mr-circuit-breaker" placeholder="KOSPI 전일 대비 등락률(%, 예: -3.2)">
+      </div>
+      <div class="grid2">
+        <select id="mr-treasury-10y">
+          <option value="">미국 10년물 1개월 변화 — 선택 안 함</option>
+          <option value="stable_or_down">안정/하락</option>
+          <option value="mild_up">완만 상승</option>
+          <option value="flat">횡보</option>
+          <option value="spike">급등(+30bp↑)</option>
+          <option value="spike_continued">급등 지속</option>
+        </select>
+        <select id="mr-sp500-per">
+          <option value="">S&P500 12M Fwd PER 위치 — 선택 안 함</option>
+          <option value="lower_mid">밴드 하단~중단</option>
+          <option value="mid">중단</option>
+          <option value="upper_mid">중상단</option>
+          <option value="near_upper">상단 근접</option>
+          <option value="above_upper">상단 초과</option>
+        </select>
+      </div>
+      <select id="mr-foreign-flow">
+        <option value="">KOSPI 외국인 수급(20일 누적) — 선택 안 함</option>
+        <option value="net_buy">순매수 지속</option>
+        <option value="turning_buy">순매수 전환</option>
+        <option value="mixed">혼조</option>
+        <option value="turning_sell">순매도 전환</option>
+        <option value="heavy_sell">대량 순매도</option>
+      </select>
+      <button type="submit">국면 판정</button>
+    </form>
+    <div id="mr-output" class="empty">아직 판정 결과가 없다.</div>
   </section>
 
   <section class="card" data-tab="journal">
@@ -1352,6 +1397,53 @@ guardSubmit(el("eq-form"), async () => {
   } else {
     el("eq-output").className = "empty";
     el("eq-output").textContent = body.detail ?? ("실패 (" + response.status + ")");
+  }
+});
+
+function renderMarketRegime(body) {
+  if (body.final_grade === null) {
+    el("mr-output").className = "empty";
+    el("mr-output").textContent = "판단 보류 — 판정 가능한 지표가 3개 미만이다(임의 등급 부여 금지).";
+    return;
+  }
+  const rows = body.indicator_grades.map((ig) =>
+    [ig.indicator, ig.observed, ig.grade ?? "제외", ig.basis || ig.note, ig.source]
+  );
+  const table = "<table><thead><tr><th>지표</th><th>관측값</th><th>등급</th><th>기준</th><th>출처</th></tr></thead><tbody>" +
+    rows.map((r) => "<tr>" + r.map((c) => "<td>" + esc(c) + "</td>").join("") + "</tr>").join("") +
+    "</tbody></table>";
+  const tally = Object.entries(body.grade_tally).map(([g, n]) => g + " " + n + "표").join(" · ");
+  el("mr-output").className = "";
+  el("mr-output").innerHTML =
+    "<h3>최종 국면: " + esc(body.final_grade) + " — " + esc(body.action_guidance) + "</h3>" +
+    "<p>매수 조건2(시장 상태 C 이상) 충족: " + (body.buy_allowed ? "예" : "아니오") +
+    (body.tie_broken ? " · 동률 발생 → 보수적(위험 쪽) 등급 채택" : "") +
+    "</p><p>집계: " + esc(tally) + "</p>" + table;
+}
+
+guardSubmit(el("mr-form"), async () => {
+  el("mr-output").className = "empty";
+  el("mr-output").textContent = "판정 중…";
+
+  const payload = {
+    vix: raw("mr-vix"),
+    circuit_breaker: raw("mr-circuit-breaker"),
+    treasury_10y: el("mr-treasury-10y").value || null,
+    sp500_per: el("mr-sp500-per").value || null,
+    kospi_foreign_flow: el("mr-foreign-flow").value || null,
+  };
+
+  const response = await fetch("/api/market-regime", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (response.ok) {
+    renderMarketRegime(body);
+  } else {
+    el("mr-output").className = "empty";
+    el("mr-output").textContent = body.detail ?? ("실패 (" + response.status + ")");
   }
 });
 </script>

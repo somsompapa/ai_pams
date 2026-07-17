@@ -8,13 +8,6 @@ from pams.equity.domain.allocation import (
     StockTarget,
     StockTargetPlan,
 )
-from pams.equity.domain.band_table import (
-    Band,
-    BandDirection,
-    BandTable,
-    CategoricalOption,
-    CategoricalTable,
-)
 from pams.equity.domain.dcf import (
     DcfAssumptions,
     DcfResult,
@@ -64,11 +57,6 @@ from pams.equity.domain.trigger import (
 __all__ = [
     "AnnualFinancials",
     "AnnualFinancialsResult",
-    "Band",
-    "BandDirection",
-    "BandTable",
-    "CategoricalOption",
-    "CategoricalTable",
     "CategoryScore",
     "CompanyScoreInputs",
     "CompanyScoreReport",

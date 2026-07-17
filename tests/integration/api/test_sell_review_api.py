@@ -51,9 +51,7 @@ class TestSellReviewApi:
             json={"structural_disruption": True, "structural_disruption_note": "대체재 등장"},
         )
         body = response.json()
-        signal = next(
-            s for s in body["thesis_break_signals"] if s["reason"] == "산업 구조 변화"
-        )
+        signal = next(s for s in body["thesis_break_signals"] if s["reason"] == "산업 구조 변화")
         assert signal["triggered"] is True
         assert signal["detail"] == "대체재 등장"
 

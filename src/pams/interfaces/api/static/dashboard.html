@@ -484,12 +484,13 @@
     <p class="empty" style="margin-top:0">
       5개 지표를 다수결(동률이면 더 위험한 쪽 채택)로 A(강세)~E(위기) 등급을 매긴다.
       3개 미만 입력되면 "판단 보류"로 응답한다(임의 등급 부여 금지). 매수 필수조건(5장)의
-      "시장 상태 C 이상" 판정 근거로 쓴다.
+      "시장 상태 C 이상" 판정 근거로 쓴다. VIX·KOSPI 등락률은 비워두면 자동조회한다
+      (실패하면 데이터 누락으로 처리— 명시 입력이 있으면 그대로 존중).
     </p>
     <form id="mr-form">
       <div class="grid2">
-        <input id="mr-vix" placeholder="VIX 종가 (예: 22.4)">
-        <input id="mr-circuit-breaker" placeholder="KOSPI 전일 대비 등락률(%, 예: -3.2)">
+        <input id="mr-vix" placeholder="VIX 종가 — 비우면 자동조회(예: 22.4)">
+        <input id="mr-circuit-breaker" placeholder="KOSPI 등락률(%) — 비우면 자동조회(예: -3.2)">
       </div>
       <div class="grid2">
         <select id="mr-treasury-10y">
@@ -1471,7 +1472,9 @@ guardSubmit(el("eq-form"), async () => {
 function renderMarketRegime(body) {
   if (body.final_grade === null) {
     el("mr-output").className = "empty";
-    el("mr-output").textContent = "판단 보류 — 판정 가능한 지표가 3개 미만이다(임의 등급 부여 금지).";
+    let msg = "판단 보류 — 판정 가능한 지표가 3개 미만이다(임의 등급 부여 금지).";
+    if ((body.fetch_errors || []).length) msg += " " + body.fetch_errors.join(" / ");
+    el("mr-output").textContent = msg;
     return;
   }
   const rows = body.indicator_grades.map((ig) =>
@@ -1481,12 +1484,15 @@ function renderMarketRegime(body) {
     rows.map((r) => "<tr>" + r.map((c) => "<td>" + esc(c) + "</td>").join("") + "</tr>").join("") +
     "</tbody></table>";
   const tally = Object.entries(body.grade_tally).map(([g, n]) => g + " " + n + "표").join(" · ");
+  const fetchErrorsHtml = (body.fetch_errors || []).length
+    ? "<p class=\"empty\">" + esc(body.fetch_errors.join(" / ")) + "</p>"
+    : "";
   el("mr-output").className = "";
   el("mr-output").innerHTML =
     "<h3>최종 국면: " + esc(body.final_grade) + " — " + esc(body.action_guidance) + "</h3>" +
     "<p>매수 조건2(시장 상태 C 이상) 충족: " + (body.buy_allowed ? "예" : "아니오") +
     (body.tie_broken ? " · 동률 발생 → 보수적(위험 쪽) 등급 채택" : "") +
-    "</p><p>집계: " + esc(tally) + "</p>" + table;
+    "</p><p>집계: " + esc(tally) + "</p>" + fetchErrorsHtml + table;
 
   el("bg-market-grade").value = body.final_grade;
 }

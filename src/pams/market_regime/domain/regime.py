@@ -22,7 +22,12 @@ from datetime import date
 from decimal import Decimal
 
 from pams.market_regime.domain.grade import Grade
-from pams.shared_kernel.domain import BandTable, CategoricalTable
+from pams.shared_kernel.domain import BandTable, CategoricalTable, DomainError
+
+
+class MarketRegimeProviderError(DomainError):
+    """VIX/KOSPI 등 시장 지표 자동조회 공급자 호출/응답 처리에 실패했다."""
+
 
 # 표에 있는 지표 키(관측값 딕셔너리의 키와 정확히 일치해야 한다).
 VIX = "vix"

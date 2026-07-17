@@ -85,8 +85,12 @@ from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
 from pams.market_data.infrastructure import CsvPriceLookup, upsert_fx_rate, upsert_price_symbol
 from pams.market_regime.application import GradeMarketRegime
-from pams.market_regime.domain import Grade
-from pams.market_regime.infrastructure import RegimeConfigError, YamlMarketRegimeConfigLoader
+from pams.market_regime.domain import Grade, MarketIndicatorProvider, MarketRegimeProviderError
+from pams.market_regime.infrastructure import (
+    RegimeConfigError,
+    YahooMarketRegimeIndicatorProvider,
+    YamlMarketRegimeConfigLoader,
+)
 from pams.portfolio.domain import CashLedger, PositionLedger, Transaction, TransactionType
 from pams.portfolio.infrastructure import CsvDataError, CsvTransactionRepository
 from pams.shared_kernel.domain import (
@@ -491,6 +495,7 @@ def create_app(
     as_of_provider: Callable[[], date] | None = None,
     password: str | None = None,
     equity_providers: dict[str, FinancialStatementProvider] | None = None,
+    market_indicator_provider: MarketIndicatorProvider | None = None,
 ) -> FastAPI:
     dashboard_service = service if service is not None else default_dashboard_service()
     as_of = as_of_provider if as_of_provider is not None else _default_as_of
@@ -501,6 +506,7 @@ def create_app(
     journal_repository = JsonlJournalRepository(storage_dir / "journal.jsonl")
     audit_recorder = RecordAuditEvent(trail=JsonlAuditTrail(storage_dir / "audit.jsonl"))
     injected_equity_providers = equity_providers or {}
+    indicator_provider = market_indicator_provider or YahooMarketRegimeIndicatorProvider()
     text_completion = completion if completion is not None else _completion_from_env()
 
     app = FastAPI(title="PAMS", version="0.1.0")
@@ -1421,9 +1427,24 @@ def create_app(
         except RegimeConfigError as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
 
+        vix = _optional_decimal("vix", request.vix)
+        circuit_breaker = _optional_decimal("circuit_breaker", request.circuit_breaker)
+        fetch_errors: list[str] = []
+        # 명시 입력이 있으면 그대로 존중하고, 없을 때만 자동조회를 시도한다(임의 대체 금지).
+        if vix is None:
+            try:
+                vix = indicator_provider.fetch_vix()
+            except MarketRegimeProviderError as error:
+                fetch_errors.append(f"VIX 자동조회 실패: {error}")
+        if circuit_breaker is None:
+            try:
+                circuit_breaker = indicator_provider.fetch_kospi_change_pct()
+            except MarketRegimeProviderError as error:
+                fetch_errors.append(f"KOSPI 등락률 자동조회 실패: {error}")
+
         observations: dict[str, Decimal | str | None] = {
-            "vix": _optional_decimal("vix", request.vix),
-            "circuit_breaker": _optional_decimal("circuit_breaker", request.circuit_breaker),
+            "vix": vix,
+            "circuit_breaker": circuit_breaker,
             "treasury_10y": request.treasury_10y,
             "sp500_per": request.sp500_per,
             "kospi_foreign_flow": request.kospi_foreign_flow,
@@ -1441,6 +1462,7 @@ def create_app(
             "tie_broken": result.tie_broken,
             "action_guidance": result.action_guidance,
             "buy_allowed": result.buy_allowed,
+            "fetch_errors": fetch_errors,
             "grade_tally": {g.value: count for g, count in result.grade_tally.items()},
             "indicator_grades": [
                 {

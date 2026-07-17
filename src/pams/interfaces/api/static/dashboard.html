@@ -403,6 +403,13 @@
       </div>
       <input id="eq-wacc-basis" placeholder="WACC 근거 (예: CAPM 10.3%+세후부채3.5%→8.5%)">
 
+      <h3>상대지표(PER/PBR/PEG) — DCF 교차검증 보조, 절대 기준 아님</h3>
+      <div class="grid2">
+        <input id="eq-per-pct" placeholder="PER 5년밴드 백분위(%, 0=최하단~100=최상단)">
+        <input id="eq-pbr-pct" placeholder="PBR 5년밴드 백분위(%, 0=최하단~100=최상단)">
+        <input id="eq-peg" placeholder="PEG (=PER÷EPS성장률%, 예: 0.8)">
+      </div>
+
       <h3>성장성 · 경쟁력</h3>
       <div class="grid2">
         <input id="eq-tam-cagr" placeholder="산업 TAM CAGR (%, 컨센서스 기준)">
@@ -1365,13 +1372,20 @@ function renderEquityScore(body) {
       "</div>";
   }
 
+  const rv = body.relative_valuation;
+  let rvHtml = "";
+  if (rv && rv.missing.length < 2) {
+    rvHtml = "<p>상대지표(PER/PBR/PEG): " + esc(rv.score) + "/10" +
+      (rv.missing.length ? " · 누락: " + esc(rv.missing.join(", ")) : "") + "</p>";
+  }
+
   const flags = score.data_quality_flags.length ? score.data_quality_flags.join(", ") : "없음";
   el("eq-output").className = "";
   el("eq-output").innerHTML =
     "<h3>" + esc(score.symbol) + " — 총점 " + esc(score.total_score) + "/100 (" + esc(score.verdict) + ")</h3>" +
     "<p>매수 점수조건(≥80점) 충족: " + (score.buy_score_condition_met ? "예" : "아니오") +
     " · 데이터 품질 플래그: " + esc(flags) + "</p>" +
-    dcfHtml + table;
+    dcfHtml + rvHtml + table;
 
   el("bg-total-score").value = score.total_score;
   const gapRatio = body.dcf && body.dcf.gap ? body.dcf.gap.gap_ratio : "";
@@ -1400,6 +1414,9 @@ guardSubmit(el("eq-form"), async () => {
     net_debt: raw("eq-net-debt") ?? "0",
     current_price: raw("eq-current-price"),
     wacc_basis: el("eq-wacc-basis").value,
+    per_band_percentile: pct("eq-per-pct"),
+    pbr_band_percentile: pct("eq-pbr-pct"),
+    peg: raw("eq-peg"),
     industry_tam_cagr: pct("eq-tam-cagr"),
     market_share_trend: el("eq-share-trend").value || null,
     gross_margin_vs_industry_pp: pct("eq-gross-margin"),

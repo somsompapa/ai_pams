@@ -135,6 +135,50 @@ class TestEquityScoreApi:
         debt_item = next(i for i in fin["items"] if i["metric"] == "부채비율")
         assert debt_item["bucket"] == "금융업 예외"
 
+    def test_relative_valuation_computed_when_inputs_provided(self, tmp_path: Path) -> None:
+        provider = _FakeProvider(
+            AnnualFinancialsResult(
+                asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+            )
+        )
+        client = _client(tmp_path, provider)
+        payload = {
+            **_BASE_PAYLOAD,
+            "per_band_percentile": "0.15",
+            "pbr_band_percentile": "0.50",
+            "peg": "0.8",
+        }
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+
+        assert body["relative_valuation"]["score"] == "8.50"
+        assert body["relative_valuation"]["missing"] == []
+
+        valuation = next(c for c in body["score"]["categories"] if c["category"] == "밸류에이션")
+        rel_item = next(i for i in valuation["items"] if "상대지표" in i["metric"])
+        assert rel_item["value"] == "8.50"
+        assert rel_item["note"] == ""
+
+    def test_relative_valuation_stays_missing_when_no_inputs_provided(self, tmp_path: Path) -> None:
+        """세 입력이 전부 없으면 0점짜리 상대지표가 아니라 '미산출'로 표시돼야 한다
+        (데이터 누락을 숨기지 않는다)."""
+        provider = _FakeProvider(
+            AnnualFinancialsResult(
+                asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+            )
+        )
+        client = _client(tmp_path, provider)
+        response = client.post("/api/equity-score", json=_BASE_PAYLOAD)
+        assert response.status_code == 200
+        body = response.json()
+
+        valuation = next(c for c in body["score"]["categories"] if c["category"] == "밸류에이션")
+        rel_item = next(i for i in valuation["items"] if "상대지표" in i["metric"])
+        assert rel_item["value"] == "—"
+        assert rel_item["bucket"] == "미산출"
+        assert rel_item["score"] == "0"
+
     def test_roe_auto_fills_from_controlling_interest_equity_when_omitted(
         self, tmp_path: Path
     ) -> None:

@@ -28,6 +28,11 @@ from pams.equity.domain.financial_statement import (
     FinancialStatementProviderError,
 )
 from pams.equity.domain.growth_metrics import GrowthMetrics, compute_growth_metrics
+from pams.equity.domain.relative_valuation import (
+    RelativeValuationConfig,
+    RelativeValuationResult,
+    relative_valuation_score,
+)
 from pams.equity.domain.score import (
     CategoryScore,
     CompanyScoreReport,
@@ -75,6 +80,8 @@ __all__ = [
     "PriceTriggerPlan",
     "PriceTriggerReport",
     "PriceTriggerRow",
+    "RelativeValuationConfig",
+    "RelativeValuationResult",
     "RiskConfig",
     "RiskDeduction",
     "ScoreItem",
@@ -94,6 +101,7 @@ __all__ = [
     "dcf_sensitivity",
     "evaluate_buy_gate",
     "project_fcf",
+    "relative_valuation_score",
     "score_company",
     "score_competitiveness",
     "score_financials",

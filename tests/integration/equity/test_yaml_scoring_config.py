@@ -10,6 +10,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+from pams.equity.domain.relative_valuation import relative_valuation_score
 from pams.equity.domain.scoring_engine import CompanyScoreInputs, RiskDeduction, score_company
 from pams.equity.infrastructure.yaml_scoring_config import YamlScoringConfigLoader
 
@@ -50,3 +51,13 @@ class TestYamlScoringConfigLoader:
         assert band.score == Decimal(7)
         roa_band = config.financial_sector_roa_vs_industry.score_for(Decimal("0.0005"))
         assert roa_band.score == Decimal(4)
+
+    def test_relative_valuation_bands_load(self) -> None:
+        config = YamlScoringConfigLoader(_CONFIG_PATH).load()
+        result = relative_valuation_score(
+            per_band_percentile=Decimal("0.15"),
+            pbr_band_percentile=Decimal("0.50"),
+            peg=Decimal("0.8"),
+            config=config.relative_valuation,
+        )
+        assert result.score == Decimal("8.50")

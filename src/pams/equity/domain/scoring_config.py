@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from pams.equity.domain.relative_valuation import RelativeValuationConfig
 from pams.shared_kernel.domain import BandTable, CategoricalTable, DomainValidationError
 
 
@@ -72,6 +73,10 @@ class ScoringConfig:
     op_margin_industry_rank: CategoricalTable
     fcf_positive_years: CategoricalTable
     debt_ratio: BandTable
+
+    # 3-4 밸류에이션(20) — DCF(주계산, 요청별 가정으로 별도 계산·score.py 밖에서 처리)는
+    # 여기 없다. 상대지표(PER/PBR/PEG)는 고정 임계값(rulebook 정량표)이라 설정에 포함한다.
+    relative_valuation: RelativeValuationConfig
 
     # 3-5 리스크(10, 감점)
     risk: RiskConfig

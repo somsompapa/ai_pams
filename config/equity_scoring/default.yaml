@@ -1,0 +1,142 @@
+# 종목 100점 스코어링 — company_analysis_rules.md 3장 배점표를 그대로 데이터로 옮긴 것.
+#
+# 코드 수정 없이 이 파일 편집만으로 임계값을 바꿀 수 있다(CLAUDE.md 절대원칙 #2).
+# 숫자는 float 오차를 막기 위해 문자열로 표기한다(Decimal 파싱).
+#
+# band 방향:
+#   higher_is_better — 값이 클수록 좋음(성장률, ROE 등). bound는 하한(그 값 이상이면 해당 구간).
+#   lower_is_better  — 값이 작을수록 좋음(부채비율 등). bound는 상한(그 값 이하면 해당 구간).
+# 각 구간표의 마지막 구간은 반드시 무한대(-Infinity 또는 Infinity)로 끝나야 한다
+# (모든 값이 어떤 구간이든 매칭되게 하기 위함 — 판단 보류 상태 방지).
+#
+# ai_stock 프로젝트(python/scoring.py, rulebook/company_analysis_rules.md)에서 실측·
+# 디버깅을 거쳐 검증된 값을 그대로 이식했다. 금융업(is_financial=True) 예외 임계값은
+# 신한지주(055550) 실측 DART 데이터 + 업권 통계(2026-07-17 조사)로 재보정된 것이다.
+
+growth:
+  revenue_cagr_3y:
+    max_score: "10"
+    direction: higher_is_better
+    bands:
+      - { bound: "0.15", score: "10", label: "≥15%" }
+      - { bound: "0.10", score: "7", label: "10~15%" }
+      - { bound: "0.05", score: "4", label: "5~10%" }
+      - { bound: "-Infinity", score: "0", label: "<5%" }
+
+  eps_cagr_3y:
+    max_score: "10"
+    direction: higher_is_better
+    bands:
+      - { bound: "0.15", score: "10", label: "≥15%" }
+      - { bound: "0.10", score: "7", label: "10~15%" }
+      - { bound: "0.05", score: "4", label: "5~10%" }
+      - { bound: "-Infinity", score: "0", label: "<5%" }
+
+  industry_tam_cagr:
+    max_score: "10"
+    direction: higher_is_better
+    bands:
+      - { bound: "0.10", score: "10", label: "≥10%" }
+      - { bound: "0.05", score: "6", label: "5~10%" }
+      - { bound: "-Infinity", score: "2", label: "<5%" }
+
+  # 금융업(은행/보험/증권/지주) 예외 — 매출 3Y CAGR 대체지표. K-IFRS상 매출액 개념이
+  # 없어 대신 총자산 3Y CAGR을 쓴다. 근거: 국내 금융지주 10곳 총자산 증가율 2023 +6.3%,
+  # 2024 +6.3%, 2025 +8.3%(웹검색), 신한지주 실측 3Y CAGR 약 6.6%(DART) — 업권 평균이
+  # "양호"(7점) 구간에 들어오도록 재보정.
+  financial_sector_total_assets_cagr_3y:
+    max_score: "10"
+    direction: higher_is_better
+    bands:
+      - { bound: "0.10", score: "10", label: "≥10%" }
+      - { bound: "0.06", score: "7", label: "6~10%" }
+      - { bound: "0.03", score: "4", label: "3~6%" }
+      - { bound: "-Infinity", score: "0", label: "<3%" }
+
+competitiveness:
+  market_share_trend:
+    max_score: "8"
+    options:
+      up: { score: "8", label: "상승" }
+      flat: { score: "4", label: "횡보" }
+      down: { score: "0", label: "하락" }
+
+  gross_margin_vs_industry:
+    max_score: "8"
+    direction: higher_is_better
+    bands:
+      - { bound: "0.05", score: "8", label: "업종평균 +5%p 이상" }
+      - { bound: "-0.05", score: "4", label: "±5%p 이내" }
+      - { bound: "-Infinity", score: "0", label: "-5%p 이하" }
+
+  # 금융업 예외 — 매출총이익률 대체지표. 근거: 국내은행 평균 ROA 2024년 0.58%,
+  # 2025년 0.59%(웹검색), 신한지주 실측 ROA(2023~2025) 약 0.62~0.65%(DART). 매출총이익률의
+  # ±5%p 밴드는 ROA 스케일(0%대)에서 무의미해 ±0.2%p로 재보정.
+  financial_sector_roa_vs_industry:
+    max_score: "8"
+    direction: higher_is_better
+    bands:
+      - { bound: "0.002", score: "8", label: "업종평균 +0.2%p 이상" }
+      - { bound: "-0.002", score: "4", label: "±0.2%p 이내" }
+      - { bound: "-Infinity", score: "0", label: "-0.2%p 이하" }
+
+  entry_barrier:
+    max_score: "4"
+    regulatory_points: "2"
+    capital_intensity_normal_points: "1"
+    capital_intensity_extreme_points: "2"  # normal과 배타적 대체(합산 아님)
+    network_effect_points: "1"
+
+financials:
+  roe:
+    max_score: "5"
+    direction: higher_is_better
+    bands:
+      - { bound: "0.15", score: "5", label: "≥15%" }
+      - { bound: "0.10", score: "3", label: "10~15%" }
+      - { bound: "-Infinity", score: "0", label: "<10%" }
+
+  # value = ROIC - WACC (application 계층에서 미리 계산해 전달)
+  roic_minus_wacc_spread:
+    max_score: "5"
+    direction: higher_is_better
+    bands:
+      - { bound: "0.03", score: "5", label: "≥WACC+3%p" }
+      - { bound: "0", score: "3", label: "WACC~WACC+3%p" }
+      - { bound: "-Infinity", score: "0", label: "<WACC" }
+
+  op_margin_industry_rank:
+    max_score: "4"
+    options:
+      top30: { score: "4", label: "업종 상위30%" }
+      mid: { score: "2", label: "중위" }
+      bottom: { score: "0", label: "하위" }
+
+  fcf_positive_years:
+    max_score: "3"
+    options:
+      "3": { score: "3", label: "3년 흑자" }
+      "2": { score: "2", label: "2년 흑자" }
+      "1": { score: "0", label: "1년 이하" }
+      "0": { score: "0", label: "1년 이하" }
+
+  # v1.4 정의 고정: 총부채(유동+비유동 전체)/자기자본. 이자부채만이 아니다.
+  # 금융업은 이 지표 자체를 적용하지 않는다(별도 예외 처리, application 계층).
+  debt_ratio:
+    max_score: "3"
+    direction: lower_is_better
+    bands:
+      - { bound: "1.0", score: "3", label: "≤100%" }
+      - { bound: "2.0", score: "1", label: "100~200%" }
+      - { bound: "Infinity", score: "0", label: ">200%" }
+
+risk:
+  base_score: "10"
+  category_caps:
+    "규제 리스크 확대": "3"
+    "경쟁 심화 신호": "3"
+    "경기민감업종 & 경기 후행국면": "2"
+    "경영진 리스크 이슈": "2"
+  # 정의되지 않은 리스크 사유가 입력되면(카테고리 재분류 필요) 무제한 감점을 막기 위해
+  # 정의된 카테고리 중 최댓값으로 캡한다.
+  undefined_category_cap: "3"

@@ -337,6 +337,7 @@
       </select>
       <input id="as-country" placeholder="국가 (예: KR, US)" value="KR" required>
       <input id="as-yahoo" placeholder="Yahoo 심볼 (예: NVDA, 005930.KS)">
+      <input id="as-exceptional" placeholder="초우량 예외 사유(선택 — 있으면 20%→30% 한도, 임의 적용 금지)">
       <input type="hidden" id="as-edit-id" value="">
       <button type="submit" id="as-submit-btn">종목 추가</button>
       <button type="button" id="as-cancel-btn" style="display:none">취소</button>
@@ -527,7 +528,9 @@
     <h2>매수 필수조건 판정 (buy_rules.md B-1 — AND 게이트)</h2>
     <p class="empty" style="margin-top:0">
       4개 조건을 모두 충족해야 매수 후보다. 위 "종목분석"·"시장국면" 탭에서 계산한 값이
-      자동으로 채워진다 — 그대로 쓰거나 직접 고쳐도 된다.
+      자동으로 채워진다 — 그대로 쓰거나 직접 고쳐도 된다. 매수 전 B-3 체크리스트의
+      포트폴리오 집중도 한도(개별 20%, 초우량 예외 30%)는 이 4개 조건에는 포함되지
+      않는다 — "분석" 탭의 알림(규정준수 위반)에서 별도로 확인한다.
     </p>
     <form id="bg-form">
       <div class="grid2">
@@ -1180,6 +1183,7 @@ async function loadAssets() {
       el("as-currency").value = a.currency;
       el("as-country").value = a.country;
       el("as-yahoo").value = "";
+      el("as-exceptional").value = a.exceptional_quality_reason || "";
       el("as-edit-id").value = a.asset_id;
       el("as-submit-btn").textContent = "수정 저장";
       el("as-cancel-btn").style.display = "";
@@ -1209,6 +1213,7 @@ guardSubmit(el("asset-form"), async () => {
     currency: el("as-currency").value,
     country: el("as-country").value,
     yahoo_symbol: el("as-yahoo").value || null,
+    exceptional_quality_reason: el("as-exceptional").value.trim() || null,
   };
   const editId = el("as-edit-id").value;
   const response = await fetch(

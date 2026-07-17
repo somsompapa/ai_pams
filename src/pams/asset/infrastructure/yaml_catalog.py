@@ -41,6 +41,8 @@ def _to_entry(asset: Asset) -> dict[str, str]:
     }
     if asset.sector is not None:
         entry["sector"] = asset.sector
+    if asset.exceptional_quality_reason is not None:
+        entry["exceptional_quality_reason"] = asset.exceptional_quality_reason
     return entry
 
 
@@ -121,6 +123,11 @@ class YamlAssetCatalog:
                     currency=Currency(str(entry.get("currency"))),
                     country=str(entry.get("country", "")),
                     sector=(str(entry["sector"]) if entry.get("sector") is not None else None),
+                    exceptional_quality_reason=(
+                        str(entry["exceptional_quality_reason"])
+                        if entry.get("exceptional_quality_reason") is not None
+                        else None
+                    ),
                 )
             except ValueError:
                 raise AssetConfigError(

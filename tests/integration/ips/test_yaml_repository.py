@@ -37,6 +37,13 @@ class TestLoadDefaultConfig:
         assert "min-cash-weight" in by_id
         assert by_id["min-cash-weight"].severity is Severity.VIOLATION
 
+    def test_exceptional_position_rule_loaded(self) -> None:
+        """portfolio_rules.md P-3 초우량 예외 30% 한도 규칙."""
+        policy = YamlPolicyRepository(ips_path=IPS_PATH, rules_path=RULES_PATH).load()
+        by_id = {rule.rule_id: rule for rule in policy.rules}
+        assert "max-exceptional-position" in by_id
+        assert by_id["max-exceptional-position"].severity is Severity.VIOLATION
+
 
 class TestParseErrors:
     def write(self, path: Path, content: str) -> Path:

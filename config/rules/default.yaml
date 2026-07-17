@@ -8,11 +8,14 @@
 #   info      - 정보성.
 #
 # metric 이름은 포트폴리오/리스크 엔진이 계산하는 지표 이름과 일치해야 한다:
-#   equity_weight        주식성 자산(국내주식+미국주식+ETF) 비중 (비율, 0~1)
-#   cash_weight          현금성 자산(현금+예수금+외화) 비중 (비율, 0~1)
-#   max_position_weight  최대 단일 종목 비중 (비율, 0~1)
-#   drawdown             현재 낙폭 (비율, 0~1; 고점 대비 하락폭)
-#   vix                  VIX 지수 레벨
+#   equity_weight                      주식성 자산(국내주식+미국주식+ETF) 비중 (비율, 0~1)
+#   cash_weight                        현금성 자산(현금+예수금+외화) 비중 (비율, 0~1)
+#   max_position_weight                최대 단일 종목 비중, 초우량 예외 종목 제외 (비율, 0~1)
+#   max_exceptional_position_weight    초우량 예외 종목(Asset.exceptional_quality_reason
+#                                       설정분)만의 최대 비중 — 사유 없이는 예외 인정 안 됨
+#                                       (비율, 0~1; portfolio_rules.md P-3)
+#   drawdown                           현재 낙폭 (비율, 0~1; 고점 대비 하락폭)
+#   vix                                VIX 지수 레벨
 #
 # then.action은 선언적 명령이다. 해석은 리밸런싱/알림 엔진이 담당한다.
 # 값은 문자열로 표기한다 (float 오차 방지).
@@ -41,7 +44,7 @@ rules:
       action: block_new_buys
 
   - id: max-single-position
-    description: 단일 종목 비중은 20%를 초과할 수 없다 (분산투자 규칙)
+    description: 단일 종목 비중은 20%를 초과할 수 없다 (분산투자 규칙, 초우량 예외 제외)
     severity: violation
     when:
       - metric: max_position_weight
@@ -51,6 +54,20 @@ rules:
       action: diversify_position
       params:
         max_weight: "0.20"
+
+  - id: max-exceptional-position
+    description: >-
+      초우량 예외 종목이라도 비중은 30%를 초과할 수 없다 (portfolio_rules.md P-3,
+      사유 문장 없는 임의 적용은 애초에 이 지표에 반영되지 않는다)
+    severity: violation
+    when:
+      - metric: max_exceptional_position_weight
+        operator: gt
+        value: "0.30"
+    then:
+      action: diversify_position
+      params:
+        max_weight: "0.30"
 
   - id: vix-emergency-rebalance
     description: VIX가 35를 넘으면 긴급 리밸런싱 후보로 검토한다

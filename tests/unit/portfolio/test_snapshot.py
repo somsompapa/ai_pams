@@ -203,6 +203,49 @@ class TestMetrics:
         # CMA(1억)·연금(5천만)이 애플(1,430,000)보다 훨씬 크지만 제외되어야 한다
         assert metrics["max_position_weight"] == Decimal("1430000") / snapshot.total_value.amount
 
+    def test_exceptional_quality_position_uses_separate_metric(self) -> None:
+        """portfolio_rules.md P-3: 초우량 예외(사유 명시) 종목은 일반 20% 한도가 아니라
+        별도 30% 한도를 적용받아야 하므로, 자체 지표로 분리돼야 한다 — 일반
+        max_position_weight에 섞여 20% 위반으로 오판되면 안 된다."""
+        nvda = Asset(
+            asset_id="NASDAQ:NVDA",
+            name="엔비디아",
+            asset_class=AssetClass.US_STOCK,
+            currency=Currency.USD,
+            country="US",
+            exceptional_quality_reason="기업 점수 90+ 3분기 연속 유지, 시장 지배력 근거",
+        )
+        positions = dict(POSITIONS)
+        positions[nvda.asset_id] = Position(
+            asset_id=nvda.asset_id,
+            quantity=Quantity.of(10),
+            cost_basis=Money.of("1000", Currency.USD),
+            realized_pnl=Money.zero(Currency.USD),
+        )
+        assets = dict(ASSETS)
+        assets[nvda.asset_id] = nvda
+        prices = dict(PRICES)
+        prices[nvda.asset_id] = Money.of("300", Currency.USD)  # 10주×300×1300 = 3,900,000 KRW
+
+        snapshot = PortfolioValuator().valuate(
+            as_of=AS_OF,
+            base_currency=Currency.KRW,
+            positions=positions,
+            assets=assets,
+            prices=prices,
+            fx_rates=FX,
+            cash_balances=CASH,
+        )
+        metrics = snapshot.metrics()
+        total = snapshot.total_value.amount
+        # 엔비디아(3,900,000)가 애플(1,430,000)보다 크지만 초우량이라 일반 지표에서 빠진다
+        assert metrics["max_position_weight"] == Decimal("1430000") / total
+        assert metrics["max_exceptional_position_weight"] == Decimal("3900000") / total
+
+    def test_no_exceptional_positions_yields_zero_metric(self) -> None:
+        snapshot = build_snapshot()
+        assert snapshot.metrics()["max_exceptional_position_weight"] == Decimal(0)
+
 
 class TestMissingData:
     def test_missing_price_raises(self) -> None:

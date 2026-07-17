@@ -256,6 +256,9 @@ class AssetRequest(BaseModel):
     country: str
     sector: str | None = None
     yahoo_symbol: str | None = None
+    # portfolio_rules.md P-3 초우량 예외(단일종목 20%→30%). 임의 적용 금지 —
+    # 반드시 사유 문장과 함께 설정한다.
+    exceptional_quality_reason: str | None = None
 
 
 class TriggerRequest(BaseModel):
@@ -844,6 +847,11 @@ def create_app(
                 currency=Currency(request.currency),
                 country=request.country.strip(),
                 sector=(request.sector.strip() if request.sector else None),
+                exceptional_quality_reason=(
+                    request.exceptional_quality_reason.strip()
+                    if request.exceptional_quality_reason
+                    else None
+                ),
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=f"잘못된 자산군/통화: {error}") from None
@@ -861,6 +869,7 @@ def create_app(
                     "currency": a.currency.value,
                     "country": a.country,
                     "sector": a.sector or "",
+                    "exceptional_quality_reason": a.exceptional_quality_reason or "",
                 }
                 for a in sorted(assets, key=lambda a: a.asset_id)
             ]

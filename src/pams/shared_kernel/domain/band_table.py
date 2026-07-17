@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum, unique
 
-from pams.shared_kernel.domain import DomainValidationError
+from pams.shared_kernel.domain.errors import DomainValidationError
 
 
 @unique

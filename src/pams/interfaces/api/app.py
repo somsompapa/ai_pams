@@ -77,6 +77,8 @@ from pams.journal.application import ListJournalEntries, RecordJournalEntry
 from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
 from pams.market_data.infrastructure import CsvPriceLookup, upsert_fx_rate, upsert_price_symbol
+from pams.market_regime.application import GradeMarketRegime
+from pams.market_regime.infrastructure import RegimeConfigError, YamlMarketRegimeConfigLoader
 from pams.portfolio.domain import CashLedger, PositionLedger, Transaction, TransactionType
 from pams.portfolio.infrastructure import CsvDataError, CsvTransactionRepository
 from pams.shared_kernel.domain import (
@@ -161,6 +163,24 @@ class EquityScoreRequest(BaseModel):
 
     # 3-5 리스크
     risk_deductions: list[RiskDeductionInput] = []
+
+
+class MarketRegimeRequest(BaseModel):
+    """시장 국면(4장 A~E) 판정 요청. market_analysis_rules.md 4장 구현(market_regime.domain).
+
+    5개 지표 중 일부만 입력해도 판정은 시도한다(3개 미만이면 '판단 보류'로 응답) —
+    자동조회 대상이 아닌 지표(10년물·PER·외국인수급)는 항상 사람이 범주를 골라 입력한다.
+    """
+
+    vix: str | None = None
+    circuit_breaker: str | None = None  # KOSPI 전일 대비 등락률(%), 예: "-5.3"
+    treasury_10y: (
+        Literal["stable_or_down", "mild_up", "flat", "spike", "spike_continued"] | None
+    ) = None
+    sp500_per: Literal["lower_mid", "mid", "upper_mid", "near_upper", "above_upper"] | None = None
+    kospi_foreign_flow: (
+        Literal["net_buy", "turning_buy", "mixed", "turning_sell", "heavy_sell"] | None
+    ) = None
 
 
 class TransactionRequest(BaseModel):
@@ -1308,6 +1328,50 @@ def create_app(
                 "roe_latest": _ratio_str(metrics.roe_latest),
             },
             "dcf": dcf_payload,
+        }
+
+    @app.post("/api/market-regime")
+    def compute_market_regime(request: MarketRegimeRequest) -> dict[str, Any]:
+        """시장 국면(4장 A~E) 판정. buy_rules.md B-1 조건2(시장 상태 C 이상)의 근거."""
+        try:
+            config = YamlMarketRegimeConfigLoader(
+                dashboard_service.config_dir / "market_regime" / "default.yaml"
+            ).load()
+        except RegimeConfigError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+
+        observations: dict[str, Decimal | str | None] = {
+            "vix": _optional_decimal("vix", request.vix),
+            "circuit_breaker": _optional_decimal("circuit_breaker", request.circuit_breaker),
+            "treasury_10y": request.treasury_10y,
+            "sp500_per": request.sp500_per,
+            "kospi_foreign_flow": request.kospi_foreign_flow,
+        }
+        result = GradeMarketRegime(config=config).execute(observations, as_of=as_of())
+        grade_text = result.final_grade.value if result.final_grade else "판단 보류"
+        record_audit(
+            actor="user",
+            action="market_regime.graded",
+            detail=f"시장국면 판정: {grade_text}",
+            reason="웹 시장분석 요청",
+        )
+        return {
+            "final_grade": result.final_grade.value if result.final_grade else None,
+            "tie_broken": result.tie_broken,
+            "action_guidance": result.action_guidance,
+            "buy_allowed": result.buy_allowed,
+            "grade_tally": {g.value: count for g, count in result.grade_tally.items()},
+            "indicator_grades": [
+                {
+                    "indicator": ig.indicator,
+                    "observed": ig.observed,
+                    "grade": ig.grade.value if ig.grade else None,
+                    "basis": ig.basis,
+                    "source": ig.source,
+                    "note": ig.note,
+                }
+                for ig in result.indicator_grades
+            ],
         }
 
     @app.get("/api/health")

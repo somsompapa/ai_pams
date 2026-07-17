@@ -4,14 +4,14 @@ from decimal import Decimal
 
 import pytest
 
-from pams.equity.domain.band_table import (
+from pams.shared_kernel.domain import (
     Band,
     BandDirection,
     BandTable,
     CategoricalOption,
     CategoricalTable,
+    DomainValidationError,
 )
-from pams.shared_kernel.domain import DomainValidationError
 
 _REVENUE_CAGR_BANDS = BandTable(
     metric="revenue_cagr_3y",

@@ -87,6 +87,7 @@
   main.tab-txlog section[data-tab="txlog"],
   main.tab-manage section[data-tab="manage"],
   main.tab-analysis section[data-tab="analysis"],
+  main.tab-equity section[data-tab="equity"],
   main.tab-journal section[data-tab="journal"] { display: block; }
   .card.hero { border-color: color-mix(in srgb, var(--accent, #3b82f6) 40%, var(--line)); }
   .action-row {
@@ -170,6 +171,7 @@
   <button type="button" class="tab-btn" data-tab="txlog">거래내역</button>
   <button type="button" class="tab-btn" data-tab="manage">관리</button>
   <button type="button" class="tab-btn" data-tab="analysis">분석</button>
+  <button type="button" class="tab-btn" data-tab="equity">종목분석</button>
   <button type="button" class="tab-btn" data-tab="journal">일지·AI</button>
 </nav>
 
@@ -369,6 +371,84 @@
   <section class="card wide" data-tab="analysis">
     <h2>월간 성과 (포트폴리오 vs 벤치마크, %)</h2>
     <table id="perf-table"></table>
+  </section>
+
+  <section class="card wide" data-tab="equity">
+    <h2>종목 100점 스코어링 + DCF (company_analysis_rules.md 3장)</h2>
+    <p class="empty" style="margin-top:0">
+      재무제표(매출/EPS/총자산 CAGR·FCF흑자연도)는 SEC(미국)·DART(한국)에서 자동 조회한다.
+      시장점유율 추이·진입장벽·WACC 근거처럼 계산으로 나오지 않는 항목은 직접 입력해야
+      한다 — 값을 임의로 채우지 않고, 비워두면 해당 항목은 0점+"데이터 누락"으로 처리된다.
+    </p>
+    <form id="eq-form">
+      <div class="grid2">
+        <input id="eq-asset-id" placeholder="종목 심볼 (예: AAPL 또는 005930)" required>
+        <select id="eq-market">
+          <option value="US">미국 (SEC EDGAR)</option>
+          <option value="KR">한국 (DART)</option>
+        </select>
+      </div>
+      <label><input type="checkbox" id="eq-is-financial"> 금융업(은행/보험/증권/지주) — 매출·매출총이익률 대신 총자산 CAGR·ROA 사용</label>
+
+      <h3>DCF 가정</h3>
+      <div class="grid2">
+        <input id="eq-wacc" placeholder="WACC (%, 예: 8.5)" required>
+        <input id="eq-terminal-growth" placeholder="영구성장률 g (%, 예: 2.5)" required>
+        <input id="eq-growth-path" placeholder="예측기간 성장률(%, 콤마구분, 예: 12,12,10,8,8)" required>
+        <input id="eq-shares" placeholder="발행주식수 (없으면 주당가치 생략)">
+        <input id="eq-net-debt" placeholder="순부채 (기본 0, 순현금이면 음수)">
+        <input id="eq-current-price" placeholder="현재가 (있으면 괴리율 계산)">
+      </div>
+      <input id="eq-wacc-basis" placeholder="WACC 근거 (예: CAPM 10.3%+세후부채3.5%→8.5%)">
+
+      <h3>성장성 · 경쟁력</h3>
+      <div class="grid2">
+        <input id="eq-tam-cagr" placeholder="산업 TAM CAGR (%, 컨센서스 기준)">
+        <select id="eq-share-trend">
+          <option value="">시장점유율 추이 — 선택 안 함(데이터 누락)</option>
+          <option value="up">상승</option>
+          <option value="flat">횡보</option>
+          <option value="down">하락</option>
+        </select>
+        <input id="eq-gross-margin" placeholder="매출총이익률 업종평균 대비(%p) — 비금융업">
+        <input id="eq-roa" placeholder="ROA 업종평균 대비(%p) — 금융업">
+      </div>
+      <div class="grid2">
+        <label><input type="checkbox" id="eq-eb-regulatory"> 규제/라이선스 장벽(+2)</label>
+        <select id="eq-eb-capital">
+          <option value="none">자본집약도 — 해당 없음</option>
+          <option value="normal">자본집약도(+1)</option>
+          <option value="extreme">자본집약도 초고강도(+2)</option>
+        </select>
+        <label><input type="checkbox" id="eq-eb-network"> 네트워크효과·전환비용(+1)</label>
+      </div>
+      <input id="eq-eb-basis" placeholder="진입장벽 근거 문장 (필수 — 없으면 무효 처리 권장)">
+
+      <h3>재무</h3>
+      <div class="grid2">
+        <input id="eq-roe" placeholder="ROE (%)">
+        <input id="eq-roic" placeholder="ROIC (%, WACC와 비교)">
+        <select id="eq-op-margin-rank">
+          <option value="">영업이익률 업종 순위 — 선택 안 함</option>
+          <option value="top30">업종 상위30%</option>
+          <option value="mid">중위</option>
+          <option value="bottom">하위</option>
+        </select>
+        <input id="eq-debt-ratio" placeholder="부채비율(총부채/자기자본, %) — 비금융업만">
+      </div>
+
+      <h3>리스크 (해당 시 체크, 근거는 선택)</h3>
+      <div class="grid2">
+        <label><input type="checkbox" id="eq-risk-regulatory"> 규제 리스크 확대(-3)</label>
+        <label><input type="checkbox" id="eq-risk-competition"> 경쟁 심화 신호(-3)</label>
+        <label><input type="checkbox" id="eq-risk-cyclical"> 경기민감업종&후행국면(-2)</label>
+        <label><input type="checkbox" id="eq-risk-governance"> 경영진 리스크 이슈(-2)</label>
+      </div>
+      <input id="eq-risk-basis" placeholder="리스크 근거 (선택, 체크한 항목 공통 적용)">
+
+      <button type="submit">점수 계산</button>
+    </form>
+    <div id="eq-output" class="empty">아직 계산 결과가 없다.</div>
   </section>
 
   <section class="card" data-tab="journal">
@@ -1185,6 +1265,95 @@ el("audit-load-more").addEventListener("click", () => {
   await loadAudit();
 })();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
+
+function pct(id) {
+  const v = el(id).value.trim();
+  return v === "" ? null : String(Number(v) / 100);
+}
+function raw(id) {
+  const v = el(id).value.trim();
+  return v === "" ? null : v;
+}
+
+function renderEquityScore(body) {
+  const score = body.score;
+  const rows = score.categories.flatMap((c) =>
+    c.items.map((i) => [c.category, i.metric, i.value ?? "—", i.bucket, i.score + "/" + i.max_score, i.note || ""])
+  );
+  const table = "<table><thead><tr><th>대분류</th><th>지표</th><th>값</th><th>구간</th><th>점수</th><th>비고</th></tr></thead><tbody>" +
+    rows.map((r) => "<tr>" + r.map((c) => "<td>" + esc(c) + "</td>").join("") + "</tr>").join("") +
+    "</tbody></table>";
+
+  let dcfHtml = "<p class=\"empty\">DCF 미산출(기준 FCF 확보 안 됨).</p>";
+  if (body.dcf && body.dcf.error) {
+    dcfHtml = "<p class=\"empty\">DCF 계산 불가: " + esc(body.dcf.error) + "</p>";
+  } else if (body.dcf) {
+    const gap = body.dcf.gap;
+    dcfHtml = "<div class=\"grid2\">" +
+      "<div>주당 적정가: " + (body.dcf.fair_value_per_share ?? "—(발행주식수 미입력)") + "</div>" +
+      "<div>괴리율: " + (gap ? gap.gap_ratio + " (" + gap.label + ")" : "—(현재가 미입력)") + "</div>" +
+      "</div>";
+  }
+
+  const flags = score.data_quality_flags.length ? score.data_quality_flags.join(", ") : "없음";
+  el("eq-output").className = "";
+  el("eq-output").innerHTML =
+    "<h3>" + esc(score.symbol) + " — 총점 " + esc(score.total_score) + "/100 (" + esc(score.verdict) + ")</h3>" +
+    "<p>매수 점수조건(≥80점) 충족: " + (score.buy_score_condition_met ? "예" : "아니오") +
+    " · 데이터 품질 플래그: " + esc(flags) + "</p>" +
+    dcfHtml + table;
+}
+
+guardSubmit(el("eq-form"), async () => {
+  el("eq-output").className = "empty";
+  el("eq-output").textContent = "조회·계산 중…";
+
+  const riskDeductions = [];
+  const riskBasis = el("eq-risk-basis").value;
+  if (el("eq-risk-regulatory").checked) riskDeductions.push({ reason: "규제 리스크 확대", points: "3", basis: riskBasis });
+  if (el("eq-risk-competition").checked) riskDeductions.push({ reason: "경쟁 심화 신호", points: "3", basis: riskBasis });
+  if (el("eq-risk-cyclical").checked) riskDeductions.push({ reason: "경기민감업종 & 경기 후행국면", points: "2", basis: riskBasis });
+  if (el("eq-risk-governance").checked) riskDeductions.push({ reason: "경영진 리스크 이슈", points: "2", basis: riskBasis });
+
+  const payload = {
+    asset_id: el("eq-asset-id").value.trim(),
+    market: el("eq-market").value,
+    is_financial: el("eq-is-financial").checked,
+    wacc: pct("eq-wacc"),
+    terminal_growth: pct("eq-terminal-growth"),
+    growth_path: el("eq-growth-path").value.split(",").map((s) => String(Number(s.trim()) / 100)),
+    shares_outstanding: raw("eq-shares"),
+    net_debt: raw("eq-net-debt") ?? "0",
+    current_price: raw("eq-current-price"),
+    wacc_basis: el("eq-wacc-basis").value,
+    industry_tam_cagr: pct("eq-tam-cagr"),
+    market_share_trend: el("eq-share-trend").value || null,
+    gross_margin_vs_industry_pp: pct("eq-gross-margin"),
+    roa_vs_industry_pp: pct("eq-roa"),
+    entry_barrier_regulatory: el("eq-eb-regulatory").checked,
+    entry_barrier_capital_intensity: el("eq-eb-capital").value,
+    entry_barrier_network_effect: el("eq-eb-network").checked,
+    entry_barrier_basis: el("eq-eb-basis").value,
+    roe: pct("eq-roe"),
+    roic: pct("eq-roic"),
+    op_margin_industry_rank: el("eq-op-margin-rank").value || null,
+    debt_ratio: pct("eq-debt-ratio"),
+    risk_deductions: riskDeductions,
+  };
+
+  const response = await fetch("/api/equity-score", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (response.ok) {
+    renderEquityScore(body);
+  } else {
+    el("eq-output").className = "empty";
+    el("eq-output").textContent = body.detail ?? ("실패 (" + response.status + ")");
+  }
+});
 </script>
 </body>
 </html>

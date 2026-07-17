@@ -41,10 +41,30 @@ from pams.asset.infrastructure import (
 from pams.audit.application import RecordAuditEvent
 from pams.audit.domain import AuditEvent
 from pams.audit.infrastructure import JsonlAuditTrail
-from pams.equity.domain import PriceTrigger, StockTarget, band_trigger
+from pams.equity.application import CalculateDcf, LoadGrowthMetrics, ScoreCompany
+from pams.equity.domain import (
+    CompanyScoreInputs,
+    DcfAssumptions,
+    PriceTrigger,
+    RiskDeduction,
+    StockTarget,
+    ValuationError,
+    band_trigger,
+)
+from pams.equity.domain.financial_statement import (
+    AnnualFinancials,
+    AnnualFinancialsResult,
+    FinancialStatementProvider,
+    FinancialStatementProviderError,
+)
+from pams.equity.domain.score import CategoryScore, CompanyScoreReport, ScoreItem
 from pams.equity.infrastructure import (
+    DartFinancialStatementProvider,
     PriceTriggerConfigError,
+    ScoringConfigError,
+    SecEdgarFinancialStatementProvider,
     StockTargetConfigError,
+    YamlScoringConfigLoader,
     YamlStockTargetLoader,
     delete_price_trigger,
     delete_stock_target,
@@ -87,6 +107,60 @@ class AnalysisRequest(BaseModel):
     kind: Literal["summary", "risk", "market", "journal_draft", "stock_trigger"]
     note: str | None = None
     asset_id: str | None = None  # kind == stock_trigger일 때 필수
+
+
+class RiskDeductionInput(BaseModel):
+    """company_analysis_rules.md 3-5 리스크 감점 항목. reason은 정의된 4종 중 하나여야
+    캡이 정상 적용된다(규제 리스크 확대/경쟁 심화 신호/경기민감업종 & 경기 후행국면/
+    경영진 리스크 이슈)."""
+
+    reason: str
+    points: str
+    basis: str = ""
+
+
+class EquityScoreRequest(BaseModel):
+    """종목 100점 스코어링 + DCF 요청. company_analysis_rules.md 3장 구현(equity.domain).
+
+    숫자는 float 오차를 막기 위해 문자열로 받는다. DCF 가정과 정성 판단 항목(시장점유율
+    추이·진입장벽·WACC 근거 등)은 사람이 입력해야 한다 — 임의 추정 금지 원칙은 여기서도
+    동일하게 적용된다(계산 불가 항목은 서버가 0점+사유로 처리, 서버가 값을 지어내지 않음).
+    """
+
+    asset_id: str
+    market: Literal["US", "KR"]
+    is_financial: bool = False
+    years: int = 4
+
+    # DCF 가정 (기준 FCF는 조회된 재무제표 최신연도에서 자동 채움 — 미확보 시 DCF 생략)
+    wacc: str
+    terminal_growth: str
+    growth_path: list[str]
+    net_debt: str = "0"
+    shares_outstanding: str | None = None
+    current_price: str | None = None
+    wacc_basis: str = ""
+
+    # 3-1 성장성 (매출/총자산 CAGR·EPS CAGR·FCF흑자연도는 조회된 재무제표로 자동 계산)
+    industry_tam_cagr: str | None = None
+
+    # 3-2 경쟁력
+    market_share_trend: Literal["up", "flat", "down"] | None = None
+    gross_margin_vs_industry_pp: str | None = None  # 비금융업
+    roa_vs_industry_pp: str | None = None  # 금융업(is_financial=True) 대체지표
+    entry_barrier_regulatory: bool = False
+    entry_barrier_capital_intensity: Literal["none", "normal", "extreme"] = "none"
+    entry_barrier_network_effect: bool = False
+    entry_barrier_basis: str = ""
+
+    # 3-3 재무
+    roe: str | None = None
+    roic: str | None = None
+    op_margin_industry_rank: Literal["top30", "mid", "bottom"] | None = None
+    debt_ratio: str | None = None  # 비금융업만(금융업은 예외 처리, company_analysis_rules.md 3-3)
+
+    # 3-5 리스크
+    risk_deductions: list[RiskDeductionInput] = []
 
 
 class TransactionRequest(BaseModel):
@@ -267,6 +341,69 @@ def _facts_for_stock(data: dict[str, Any], asset_id: str) -> list[str]:
     ]
 
 
+def _serialize_annual_financials(row: AnnualFinancials) -> dict[str, Any]:
+    return {
+        "fiscal_year": row.fiscal_year,
+        "revenue": str(row.revenue) if row.revenue is not None else None,
+        "operating_income": str(row.operating_income) if row.operating_income is not None else None,
+        "net_income": str(row.net_income) if row.net_income is not None else None,
+        "eps": str(row.eps) if row.eps is not None else None,
+        "gross_profit": str(row.gross_profit) if row.gross_profit is not None else None,
+        "total_assets": str(row.total_assets) if row.total_assets is not None else None,
+        "total_equity": str(row.total_equity) if row.total_equity is not None else None,
+        "total_equity_derived": row.total_equity_derived,
+        "total_debt": str(row.total_debt) if row.total_debt is not None else None,
+        "cash": str(row.cash) if row.cash is not None else None,
+        "operating_cash_flow": (
+            str(row.operating_cash_flow) if row.operating_cash_flow is not None else None
+        ),
+        "capex": str(row.capex) if row.capex is not None else None,
+        "fcf": str(row.fcf) if row.fcf is not None else None,
+    }
+
+
+def _serialize_financials_result(result: AnnualFinancialsResult) -> dict[str, Any]:
+    return {
+        "asset_id": result.asset_id,
+        "data_source": result.data_source,
+        "annual": [_serialize_annual_financials(row) for row in result.annual],
+        "fetch_errors": list(result.fetch_errors),
+    }
+
+
+def _serialize_score_item(item: ScoreItem) -> dict[str, Any]:
+    return {
+        "metric": item.metric,
+        "value": item.value,
+        "bucket": item.bucket,
+        "score": str(item.score),
+        "max_score": str(item.max_score),
+        "note": item.note,
+    }
+
+
+def _serialize_category(category: CategoryScore) -> dict[str, Any]:
+    return {
+        "category": category.category,
+        "max_score": str(category.max_score),
+        "score": str(category.score),
+        "items": [_serialize_score_item(item) for item in category.items],
+    }
+
+
+def _serialize_score_report(report: CompanyScoreReport) -> dict[str, Any]:
+    return {
+        "symbol": report.symbol,
+        "as_of": report.as_of.isoformat(),
+        "data_source": report.data_source,
+        "total_score": str(report.total_score),
+        "verdict": report.verdict.value,
+        "buy_score_condition_met": report.buy_score_condition_met,
+        "categories": [_serialize_category(c) for c in report.categories],
+        "data_quality_flags": list(report.data_quality_flags),
+    }
+
+
 def _authorized(header: str | None, password: str) -> bool:
     if not header or not header.startswith("Basic "):
         return False
@@ -285,6 +422,7 @@ def create_app(
     completion: TextCompletion | None = None,
     as_of_provider: Callable[[], date] | None = None,
     password: str | None = None,
+    equity_providers: dict[str, FinancialStatementProvider] | None = None,
 ) -> FastAPI:
     dashboard_service = service if service is not None else default_dashboard_service()
     as_of = as_of_provider if as_of_provider is not None else _default_as_of
@@ -294,6 +432,7 @@ def create_app(
     storage_dir = data_dir if data_dir is not None else _PROJECT_ROOT / "data"
     journal_repository = JsonlJournalRepository(storage_dir / "journal.jsonl")
     audit_recorder = RecordAuditEvent(trail=JsonlAuditTrail(storage_dir / "audit.jsonl"))
+    injected_equity_providers = equity_providers or {}
     text_completion = completion if completion is not None else _completion_from_env()
 
     app = FastAPI(title="PAMS", version="0.1.0")
@@ -957,6 +1096,207 @@ def create_app(
             reason="사용자 요청",
         )
         return {"kind": narrative.kind.value, "text": narrative.text}
+
+    def _equity_financial_provider(market: str) -> FinancialStatementProvider:
+        injected = injected_equity_providers.get(market)
+        if injected is not None:
+            return injected
+        if market == "US":
+            contact = os.environ.get("SEC_EDGAR_CONTACT_EMAIL", "").strip()
+            return SecEdgarFinancialStatementProvider(contact_email=contact)
+        if market == "KR":
+            api_key = os.environ.get("DART_API_KEY", "").strip()
+            return DartFinancialStatementProvider(
+                api_key=api_key,
+                corp_code_cache_path=storage_dir / ".dart_corp_code_cache.xml",
+            )
+        raise HTTPException(status_code=400, detail=f"알 수 없는 market: {market}")
+
+    def _optional_decimal(label: str, value: str | None) -> Decimal | None:
+        if value is None or value.strip() == "":
+            return None
+        try:
+            return Decimal(value)
+        except InvalidOperation:
+            raise HTTPException(
+                status_code=400, detail=f"{label}: 숫자 형식 오류({value!r})"
+            ) from None
+
+    def _required_decimal(label: str, value: str) -> Decimal:
+        result = _optional_decimal(label, value)
+        if result is None:
+            raise HTTPException(status_code=400, detail=f"{label}: 필수 값이 비어 있다")
+        return result
+
+    def _money_str(value: Decimal) -> str:
+        """DCF 산출값(적정가·기업가치 등) 표시용 반올림(소수 2자리) — 계산은 원본
+        Decimal로 이미 끝난 뒤라 표시값 반올림이 정확도에 영향을 주지 않는다."""
+        return str(value.quantize(Decimal("0.01")))
+
+    def _ratio_str(value: Decimal | None) -> str | None:
+        """CAGR 등 비율 표시용 반올림(소수 4자리) — ln()/exp()로 계산돼 전체 정밀도를
+        그대로 노출하면 API 응답이 읽기 어렵다."""
+        return str(value.quantize(Decimal("0.0001"))) if value is not None else None
+
+    @app.post("/api/equity-score")
+    def compute_equity_score(request: EquityScoreRequest) -> dict[str, Any]:
+        """종목 100점 스코어링 + DCF (company_analysis_rules.md 3장, equity.domain).
+
+        재무제표(SEC/DART)는 자동 조회하고, 정성 판단 항목·DCF 가정은 요청 본문으로 받는다
+        — 계산 불가한 항목을 서버가 지어내지 않는다(임의 추정 금지).
+        """
+        provider = _equity_financial_provider(request.market)
+        try:
+            growth_report = LoadGrowthMetrics(provider=provider).execute(
+                request.asset_id, years=request.years
+            )
+        except FinancialStatementProviderError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
+        metrics = growth_report.metrics
+        annual = growth_report.financials.annual
+        base_fcf = annual[-1].fcf if annual else None
+
+        dcf_payload: dict[str, Any] | None = None
+        dcf_score: Decimal | None = None
+        if base_fcf is not None:
+            try:
+                assumptions = DcfAssumptions(
+                    base_fcf=base_fcf,
+                    wacc=_required_decimal("wacc", request.wacc),
+                    terminal_growth=_required_decimal("terminal_growth", request.terminal_growth),
+                    growth_path=tuple(
+                        _required_decimal(f"growth_path[{i}]", g)
+                        for i, g in enumerate(request.growth_path)
+                    ),
+                    net_debt=_optional_decimal("net_debt", request.net_debt) or Decimal(0),
+                    shares_outstanding=_optional_decimal(
+                        "shares_outstanding", request.shares_outstanding
+                    ),
+                    wacc_basis=request.wacc_basis,
+                )
+                dcf_report = CalculateDcf().execute(
+                    assumptions,
+                    current_price=_optional_decimal("current_price", request.current_price),
+                )
+                dcf_score = dcf_report.gap.score if dcf_report.gap is not None else None
+                dcf_payload = {
+                    "fair_value_per_share": (
+                        _money_str(dcf_report.result.fair_value_per_share)
+                        if dcf_report.result.fair_value_per_share is not None
+                        else None
+                    ),
+                    "enterprise_value": _money_str(dcf_report.result.enterprise_value),
+                    "equity_value": _money_str(dcf_report.result.equity_value),
+                    "sensitivity_grid": {
+                        k: (_money_str(v) if v is not None else None)
+                        for k, v in dcf_report.sensitivity.items()
+                    },
+                    "trigger_zones": {
+                        "buy_high_confidence_upper": _money_str(
+                            dcf_report.zones.buy_high_confidence_upper
+                        ),
+                        "buy_base_case_upper": _money_str(dcf_report.zones.buy_base_case_upper),
+                        "watch_lower": _money_str(dcf_report.zones.watch_lower),
+                        "watch_upper": _money_str(dcf_report.zones.watch_upper),
+                        "sell_25pct_lower": _money_str(dcf_report.zones.sell_25pct_lower),
+                        "sell_50pct_lower": _money_str(dcf_report.zones.sell_50pct_lower),
+                    },
+                    "gap": (
+                        {
+                            "gap_ratio": str(dcf_report.gap.gap_ratio.quantize(Decimal("0.0001"))),
+                            "score": str(dcf_report.gap.score),
+                            "label": dcf_report.gap.label,
+                            "buy_price_condition_met": dcf_report.gap.buy_price_condition_met,
+                        }
+                        if dcf_report.gap is not None
+                        else None
+                    ),
+                }
+            except ValuationError as error:
+                dcf_payload = {"error": str(error)}
+
+        risk_deductions = tuple(
+            RiskDeduction(
+                reason=d.reason,
+                points=_required_decimal(f"risk_deductions.{d.reason}.points", d.points),
+                basis=d.basis,
+            )
+            for d in request.risk_deductions
+        )
+
+        inputs = CompanyScoreInputs(
+            symbol=request.asset_id,
+            as_of=as_of(),
+            data_source=growth_report.financials.data_source,
+            is_financial=request.is_financial,
+            revenue_cagr_3y=None if request.is_financial else metrics.revenue_cagr_3y,
+            total_assets_cagr_3y=metrics.total_assets_cagr_3y if request.is_financial else None,
+            eps_cagr_3y=metrics.eps_cagr_3y,
+            industry_tam_cagr=_optional_decimal("industry_tam_cagr", request.industry_tam_cagr),
+            market_share_trend=request.market_share_trend,
+            gross_margin_vs_industry_pp=(
+                None
+                if request.is_financial
+                else _optional_decimal(
+                    "gross_margin_vs_industry_pp", request.gross_margin_vs_industry_pp
+                )
+            ),
+            roa_vs_industry_pp=(
+                _optional_decimal("roa_vs_industry_pp", request.roa_vs_industry_pp)
+                if request.is_financial
+                else None
+            ),
+            entry_barrier_regulatory=request.entry_barrier_regulatory,
+            entry_barrier_capital_intensity=request.entry_barrier_capital_intensity,
+            entry_barrier_network_effect=request.entry_barrier_network_effect,
+            entry_barrier_basis=request.entry_barrier_basis,
+            roe=_optional_decimal("roe", request.roe),
+            roic=_optional_decimal("roic", request.roic),
+            wacc_estimate=_optional_decimal("wacc", request.wacc),
+            wacc_basis=request.wacc_basis,
+            op_margin_industry_rank=request.op_margin_industry_rank,
+            fcf_positive_years=metrics.fcf_positive_years,
+            debt_ratio=(
+                None
+                if request.is_financial
+                else _optional_decimal("debt_ratio", request.debt_ratio)
+            ),
+            dcf_valuation_score=dcf_score,
+            risk_deductions=risk_deductions,
+        )
+
+        try:
+            scoring_config = YamlScoringConfigLoader(
+                dashboard_service.config_dir / "equity_scoring" / "default.yaml"
+            ).load()
+        except ScoringConfigError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+
+        score_report = ScoreCompany(config=scoring_config).execute(inputs)
+        record_audit(
+            actor="user",
+            action="equity_score.computed",
+            detail=f"종목분석: {request.asset_id} 총점 {score_report.total_score}",
+            reason="웹 종목분석 요청",
+        )
+        return {
+            "score": _serialize_score_report(score_report),
+            "financials": _serialize_financials_result(growth_report.financials),
+            "growth_metrics": {
+                "revenue_cagr_3y": _ratio_str(metrics.revenue_cagr_3y),
+                "revenue_cagr_3y_note": metrics.revenue_cagr_3y_note,
+                "eps_cagr_3y": _ratio_str(metrics.eps_cagr_3y),
+                "eps_cagr_3y_note": metrics.eps_cagr_3y_note,
+                "total_assets_cagr_3y": _ratio_str(metrics.total_assets_cagr_3y),
+                "total_assets_cagr_3y_note": metrics.total_assets_cagr_3y_note,
+                "fcf_positive_years": metrics.fcf_positive_years,
+                "fcf_positive_years_note": metrics.fcf_positive_years_note,
+                "roa_latest": _ratio_str(metrics.roa_latest),
+                "gross_margin_latest": _ratio_str(metrics.gross_margin_latest),
+            },
+            "dcf": dcf_payload,
+        }
 
     @app.get("/api/health")
     def health() -> dict[str, str]:

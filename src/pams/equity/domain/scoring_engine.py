@@ -74,6 +74,16 @@ class CompanyScoreInputs:
     data_quality_flags: tuple[str, ...] = field(default_factory=tuple)
 
 
+_DISPLAY_QUANTIZE = Decimal("0.0001")
+
+
+def _display(value: Decimal) -> str:
+    """근거표 표시용 반올림(4자리) — CAGR은 ln()/exp()로 계산돼 전체 정밀도(28자리)를
+    그대로 str()하면 근거표가 읽기 어렵다. 채점 자체는 원본 Decimal로 이미 끝난 뒤이므로
+    표시값만 반올림해도 점수 정확도에는 영향이 없다(ai_stock의 round(v*100, 2)와 동일 취지)."""
+    return str(value.quantize(_DISPLAY_QUANTIZE))
+
+
 def _missing(metric: str, max_score: Decimal, reason: str = "데이터 누락") -> ScoreItem:
     return ScoreItem(
         metric=metric,
@@ -103,7 +113,7 @@ def score_growth(inputs: CompanyScoreInputs, config: ScoringConfig) -> CategoryS
         items.append(
             ScoreItem(
                 metric=metric,
-                value=str(value),
+                value=_display(value),
                 bucket=band.label,
                 score=band.score,
                 max_score=table.max_score,
@@ -117,7 +127,7 @@ def score_growth(inputs: CompanyScoreInputs, config: ScoringConfig) -> CategoryS
         items.append(
             ScoreItem(
                 metric="EPS 3Y CAGR",
-                value=str(inputs.eps_cagr_3y),
+                value=_display(inputs.eps_cagr_3y),
                 bucket=band.label,
                 score=band.score,
                 max_score=config.eps_cagr_3y.max_score,
@@ -131,7 +141,7 @@ def score_growth(inputs: CompanyScoreInputs, config: ScoringConfig) -> CategoryS
         items.append(
             ScoreItem(
                 metric="산업 TAM CAGR",
-                value=str(inputs.industry_tam_cagr),
+                value=_display(inputs.industry_tam_cagr),
                 bucket=band.label,
                 score=band.score,
                 max_score=config.industry_tam_cagr.max_score,
@@ -184,7 +194,7 @@ def score_competitiveness(inputs: CompanyScoreInputs, config: ScoringConfig) -> 
         items.append(
             ScoreItem(
                 metric=metric,
-                value=str(value),
+                value=_display(value),
                 bucket=band.label,
                 score=band.score,
                 max_score=table.max_score,
@@ -223,7 +233,7 @@ def score_financials(inputs: CompanyScoreInputs, config: ScoringConfig) -> Categ
         items.append(
             ScoreItem(
                 metric="ROE",
-                value=str(inputs.roe),
+                value=_display(inputs.roe),
                 bucket=band.label,
                 score=band.score,
                 max_score=config.roe.max_score,
@@ -309,7 +319,7 @@ def score_financials(inputs: CompanyScoreInputs, config: ScoringConfig) -> Categ
         items.append(
             ScoreItem(
                 metric="부채비율",
-                value=str(inputs.debt_ratio) if inputs.debt_ratio is not None else "—",
+                value=_display(inputs.debt_ratio) if inputs.debt_ratio is not None else "—",
                 bucket="금융업 예외",
                 score=Decimal(0),
                 max_score=config.debt_ratio.max_score,
@@ -337,7 +347,7 @@ def score_financials(inputs: CompanyScoreInputs, config: ScoringConfig) -> Categ
         items.append(
             ScoreItem(
                 metric="부채비율(총부채기준)",
-                value=str(inputs.debt_ratio),
+                value=_display(inputs.debt_ratio),
                 bucket=band.label,
                 score=band.score,
                 max_score=config.debt_ratio.max_score,

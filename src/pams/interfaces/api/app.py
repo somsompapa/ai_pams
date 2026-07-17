@@ -50,6 +50,7 @@ from pams.equity.domain import (
     StockTarget,
     ValuationError,
     band_trigger,
+    evaluate_buy_gate,
 )
 from pams.equity.domain.financial_statement import (
     AnnualFinancials,
@@ -78,6 +79,7 @@ from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
 from pams.market_data.infrastructure import CsvPriceLookup, upsert_fx_rate, upsert_price_symbol
 from pams.market_regime.application import GradeMarketRegime
+from pams.market_regime.domain import Grade
 from pams.market_regime.infrastructure import RegimeConfigError, YamlMarketRegimeConfigLoader
 from pams.portfolio.domain import CashLedger, PositionLedger, Transaction, TransactionType
 from pams.portfolio.infrastructure import CsvDataError, CsvTransactionRepository
@@ -181,6 +183,20 @@ class MarketRegimeRequest(BaseModel):
     kospi_foreign_flow: (
         Literal["net_buy", "turning_buy", "mixed", "turning_sell", "heavy_sell"] | None
     ) = None
+
+
+class BuyGateRequest(BaseModel):
+    """매수 필수조건(buy_rules.md B-1) AND 게이트 판정 요청.
+
+    /api/equity-score와 /api/market-regime 호출 결과를 클라이언트가 조립해 넘긴다
+    (equity와 market_regime은 서로 다른 컨텍스트라 서버가 자동으로 묶지 않는다 —
+    두 계산은 독립적으로 이미 끝난 상태에서, 이 엔드포인트는 4개 조건만 판정한다).
+    """
+
+    total_score: str  # 0~100, /api/equity-score의 score.total_score
+    dcf_gap_ratio: str | None = None  # /api/equity-score dcf.gap.gap_ratio
+    market_grade: Literal["A", "B", "C", "D", "E"] | None = None  # /api/market-regime final_grade
+    investment_thesis: str = ""
 
 
 class TransactionRequest(BaseModel):
@@ -1371,6 +1387,44 @@ def create_app(
                     "note": ig.note,
                 }
                 for ig in result.indicator_grades
+            ],
+        }
+
+    @app.post("/api/buy-gate")
+    def compute_buy_gate(request: BuyGateRequest) -> dict[str, Any]:
+        """매수 필수조건(buy_rules.md B-1) AND 게이트. 4개 조건 중 하나라도 미충족이면
+        매수 금지 — /api/equity-score·/api/market-regime 결과를 조립해 판정만 한다."""
+        total_score = _required_decimal("total_score", request.total_score)
+        score_met = total_score >= 80
+
+        market_grade = Grade(request.market_grade) if request.market_grade else None
+        market_met = market_grade is not None and market_grade.at_least_as_safe_as(Grade.C)
+        market_detail = market_grade.value if market_grade else "미확보(판단 보류 포함)"
+
+        gap_ratio = _optional_decimal("dcf_gap_ratio", request.dcf_gap_ratio)
+        price_met = gap_ratio is not None and gap_ratio <= Decimal("-0.10")
+        price_detail = "미확보" if gap_ratio is None else str(gap_ratio.quantize(Decimal("0.0001")))
+
+        result = evaluate_buy_gate(
+            score_condition_met=score_met,
+            score_detail=f"{total_score}점",
+            market_grade_condition_met=market_met,
+            market_grade_detail=market_detail,
+            price_discount_condition_met=price_met,
+            price_discount_detail=price_detail,
+            investment_thesis=request.investment_thesis,
+        )
+        record_audit(
+            actor="user",
+            action="buy_gate.evaluated",
+            detail=f"매수 게이트 판정: {'통과' if result.all_conditions_met else '미충족'}",
+            reason="웹 매수판정 요청",
+        )
+        return {
+            "all_conditions_met": result.all_conditions_met,
+            "conditions": [
+                {"condition": c.condition, "met": c.met, "detail": c.detail}
+                for c in result.conditions
             ],
         }
 

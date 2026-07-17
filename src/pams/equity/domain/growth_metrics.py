@@ -28,6 +28,7 @@ class GrowthMetrics:
     fcf_positive_years_note: str | None
     gross_margin_latest: Decimal | None
     roa_latest: Decimal | None
+    roe_latest: Decimal | None
 
 
 def _cagr_3y(
@@ -74,12 +75,22 @@ def compute_growth_metrics(annual: tuple[AnnualFinancials, ...]) -> GrowthMetric
 
     gross_margin: Decimal | None = None
     roa: Decimal | None = None
+    roe: Decimal | None = None
     if sorted_annual:
         last = sorted_annual[-1]
         if last.revenue is not None and last.revenue > 0 and last.gross_profit is not None:
             gross_margin = last.gross_profit / last.revenue
         if last.total_assets is not None and last.total_assets > 0 and last.net_income is not None:
             roa = last.net_income / last.total_assets
+        # ROE 분모는 반드시 controlling_interest_equity(지배주주지분)를 쓴다.
+        # total_equity(총자본, 비지배지분 포함)를 쓰면 ROE가 실제보다 낮게 왜곡된다
+        # (실측: 신한지주 total_equity 60.37조 vs 지배주주지분 38.45조).
+        if (
+            last.controlling_interest_equity is not None
+            and last.controlling_interest_equity > 0
+            and last.net_income is not None
+        ):
+            roe = last.net_income / last.controlling_interest_equity
 
     return GrowthMetrics(
         revenue_cagr_3y=revenue_cagr,
@@ -92,4 +103,5 @@ def compute_growth_metrics(annual: tuple[AnnualFinancials, ...]) -> GrowthMetric
         fcf_positive_years_note=fcf_note,
         gross_margin_latest=gross_margin,
         roa_latest=roa,
+        roe_latest=roe,
     )

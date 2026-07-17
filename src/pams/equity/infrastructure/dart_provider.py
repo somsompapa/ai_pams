@@ -11,6 +11,9 @@
      임의 추정이 아니다).
   3. 은행지주처럼 BS 표기("현금및현금성자산") 없이 CF표 라벨("기말의 현금 및
      현금성자산")만 쓰는 경우를 위한 cash 대체 후보.
+  4. ROE 분모는 total_equity(자본총계, 비지배지분 포함)가 아니라 지배기업소유주지분이어야
+     한다 — DART 신한지주(055550) 실측에서 이 둘의 차이가 8.5점 밴드 하나를 넘어갈 만큼
+     크다는 사실을 발견하고 별도 필드(controlling_interest_equity)로 분리했다.
 """
 
 from __future__ import annotations
@@ -54,6 +57,15 @@ _ACCOUNT_MAP: dict[str, tuple[str, ...]] = {
     "total_assets": ("자산총계",),
     "total_liabilities": ("부채총계",),
     "total_equity": ("자본총계",),
+    # ⚠️ ROE 분모 전용. total_equity(자본총계)는 비지배지분·신종자본증권을 포함해
+    # ROE 분모로 쓰면 왜곡된다(실측: 신한지주 total_equity 60.37조 vs 이 값 38.45조).
+    "controlling_interest_equity": (
+        "지배기업소유주지분",
+        "지배기업의소유주에게귀속되는자본",
+        "지배기업의소유지분",
+        "지배기업소유지분",
+        "지배주주지분",
+    ),
     "cash": ("현금및현금성자산", "기말의현금및현금성자산"),
     "operating_cash_flow": (
         "영업활동현금흐름",
@@ -204,6 +216,7 @@ class DartFinancialStatementProvider:
                     total_assets=values["total_assets"],
                     total_equity=total_equity,
                     total_equity_derived=total_equity_derived,
+                    controlling_interest_equity=values["controlling_interest_equity"],
                     # v1.4 정의: 부채비율 = 총부채(DART '부채총계')/자기자본
                     total_debt=values["total_liabilities"],
                     cash=values["cash"],

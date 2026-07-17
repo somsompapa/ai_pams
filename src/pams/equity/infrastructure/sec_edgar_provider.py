@@ -12,6 +12,9 @@ SEC 요구사항, 없으면 403). ai_stock 프로젝트에서 로컬 실측(AAPL
      변경으로 태그가 바뀐 회사(AAPL은 "Revenues"를 2018년 이전까지만 쓰고 이후
      "RevenueFromContractWithCustomerExcludingAssessedTax"로 전환)에서 옛 태그가
      "데이터 있음"으로 먼저 걸려 최근 연도를 못 채우는 문제를 막는다.
+  3. ROE 분모는 controlling_interest_equity(StockholdersEquity 태그 단독)만 쓴다 —
+     total_equity처럼 비지배지분 포함 태그를 폴백으로 섞지 않는다(DART 쪽에서 발견된
+     동일 문제의 재발 방지).
 """
 
 from __future__ import annotations
@@ -45,6 +48,9 @@ _TAG_CANDIDATES: dict[str, tuple[str, ...]] = {
         "StockholdersEquity",
         "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
     ),
+    # ⚠️ ROE 분모 전용. StockholdersEquity 하나만 본다 — 비지배지분 포함 태그를
+    # 섞으면 total_equity와 같은 문제(분모 과대)가 재현된다.
+    "controlling_interest_equity": ("StockholdersEquity",),
     "total_assets": ("Assets",),
     "total_liabilities": ("Liabilities",),
     "long_term_debt": ("LongTermDebtNoncurrent", "LongTermDebt"),
@@ -197,6 +203,7 @@ class SecEdgarFinancialStatementProvider:
                     gross_profit=extracted["gross_profit"].get(fy),
                     total_assets=total_assets,
                     total_equity=total_equity,
+                    controlling_interest_equity=extracted["controlling_interest_equity"].get(fy),
                     total_debt=total_debt,
                     interest_bearing_debt=interest_bearing,
                     cash=extracted["cash"].get(fy),

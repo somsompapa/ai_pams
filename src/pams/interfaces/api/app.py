@@ -352,6 +352,11 @@ def _serialize_annual_financials(row: AnnualFinancials) -> dict[str, Any]:
         "total_assets": str(row.total_assets) if row.total_assets is not None else None,
         "total_equity": str(row.total_equity) if row.total_equity is not None else None,
         "total_equity_derived": row.total_equity_derived,
+        "controlling_interest_equity": (
+            str(row.controlling_interest_equity)
+            if row.controlling_interest_equity is not None
+            else None
+        ),
         "total_debt": str(row.total_debt) if row.total_debt is not None else None,
         "cash": str(row.cash) if row.cash is not None else None,
         "operating_cash_flow": (
@@ -1251,7 +1256,13 @@ def create_app(
             entry_barrier_capital_intensity=request.entry_barrier_capital_intensity,
             entry_barrier_network_effect=request.entry_barrier_network_effect,
             entry_barrier_basis=request.entry_barrier_basis,
-            roe=_optional_decimal("roe", request.roe),
+            # roe 미입력 시 자동조회된 재무제표에서 계산한 값을 쓴다(분모는 반드시
+            # controlling_interest_equity — total_equity/총자본 아님, growth_metrics.py 참조).
+            roe=(
+                _optional_decimal("roe", request.roe)
+                if request.roe is not None
+                else metrics.roe_latest
+            ),
             roic=_optional_decimal("roic", request.roic),
             wacc_estimate=_optional_decimal("wacc", request.wacc),
             wacc_basis=request.wacc_basis,
@@ -1294,6 +1305,7 @@ def create_app(
                 "fcf_positive_years_note": metrics.fcf_positive_years_note,
                 "roa_latest": _ratio_str(metrics.roa_latest),
                 "gross_margin_latest": _ratio_str(metrics.gross_margin_latest),
+                "roe_latest": _ratio_str(metrics.roe_latest),
             },
             "dcf": dcf_payload,
         }

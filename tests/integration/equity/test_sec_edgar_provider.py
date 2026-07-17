@@ -147,6 +147,31 @@ class TestSecEdgarFinancialStatementProvider:
         result = provider.annual_financials("AAPL", years=1)
         assert result.annual[0].total_debt == Decimal("0.0")
 
+    def test_controlling_interest_equity_excludes_nci_inclusive_fallback(self) -> None:
+        """ROE 분모 버그 재현: StockholdersEquity(지배주주지분) 태그가 없고 NCI 포함
+        태그만 있으면 total_equity는 폴백으로 채워지지만, controlling_interest_equity는
+        None으로 남아야 한다 — NCI 포함 값을 ROE 분모로 대체하지 않는다."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "company_tickers" in str(request.url):
+                return httpx.Response(200, json=_TICKERS_BODY)
+            facts = {
+                "facts": {
+                    "us-gaap": {
+                        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest": {
+                            "units": {"USD": [_fact_entry(2025, "2025-12-31", 500.0)]}
+                        },
+                    }
+                }
+            }
+            return httpx.Response(200, json=facts)
+
+        provider = self.make(handler)
+        result = provider.annual_financials("AAPL", years=1)
+        row = result.annual[0]
+        assert row.total_equity == Decimal("500.0")
+        assert row.controlling_interest_equity is None
+
     def test_unknown_ticker_raises(self) -> None:
         provider = self.make(lambda _r: httpx.Response(200, json=_TICKERS_BODY))
         with pytest.raises(FinancialStatementProviderError, match="CIK"):

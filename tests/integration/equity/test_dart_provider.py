@@ -116,6 +116,36 @@ class TestDartFinancialStatementProvider:
         assert row.total_equity == Decimal("60372324000000")
         assert row.total_equity_derived is True
 
+    def test_controlling_interest_equity_matched_separately_from_total_equity(
+        self, tmp_path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """ROE 분모 버그 재현: total_equity(자본총계, 비지배지분 포함)와
+        controlling_interest_equity(지배기업소유주지분)는 다른 계정이며 둘 다 채워져야
+        한다 — total_equity를 ROE 분모로 대체하면 안 된다(실측: 신한지주 8.5점 밴드 차이)."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "corpCode" in str(request.url):
+                return httpx.Response(200, content=_corp_code_zip_bytes())
+            year = request.url.params.get("bsns_year")
+            if year != "2025":
+                return httpx.Response(200, json={"status": "013", "message": "no data"})
+            return httpx.Response(
+                200,
+                json={
+                    "status": "000",
+                    "list": [
+                        _dart_item("자본총계", "60,372,324,000,000"),
+                        _dart_item("지배기업소유주지분", "38,450,000,000,000"),
+                    ],
+                },
+            )
+
+        provider = self.make(handler, tmp_path)
+        result = provider.annual_financials("055550", years=1)
+        row = result.annual[0]
+        assert row.total_equity == Decimal("60372324000000")
+        assert row.controlling_interest_equity == Decimal("38450000000000")
+
     def test_financial_sector_cash_fallback_label(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
         """신한지주 실측 버그 재현: BS 라벨('현금및현금성자산') 없이 CF표 라벨
         ('기말의 현금 및 현금성자산')만 있어도 cash가 매칭돼야 한다."""

@@ -135,6 +135,33 @@ class TestEquityScoreApi:
         debt_item = next(i for i in fin["items"] if i["metric"] == "부채비율")
         assert debt_item["bucket"] == "금융업 예외"
 
+    def test_roe_auto_fills_from_controlling_interest_equity_when_omitted(
+        self, tmp_path: Path
+    ) -> None:
+        """roe를 요청에서 생략하면 자동조회된 재무제표(controlling_interest_equity 기준)로
+        계산한 값을 써야 한다 — total_equity(총자본)가 아니라 지배주주지분 기준."""
+        annual = (
+            AnnualFinancials(
+                fiscal_year=2025,
+                net_income=Decimal("5084519000000"),
+                total_equity=Decimal("60372324000000"),
+                controlling_interest_equity=Decimal("38450000000000"),
+            ),
+        )
+        provider = _FakeProvider(
+            AnnualFinancialsResult(asset_id="TEST", data_source="fake", annual=annual)
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "roe": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+
+        fin = next(c for c in body["score"]["categories"] if c["category"] == "재무")
+        roe_item = next(i for i in fin["items"] if i["metric"] == "ROE")
+        assert roe_item["value"] == "0.1322"
+        assert body["growth_metrics"]["roe_latest"] == "0.1322"
+
     def test_missing_shares_outstanding_degrades_dcf_to_error_not_crash(
         self, tmp_path: Path
     ) -> None:

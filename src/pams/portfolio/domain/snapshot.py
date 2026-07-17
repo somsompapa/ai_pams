@@ -153,18 +153,27 @@ class PortfolioSnapshot:
             ),
             Decimal(0),
         ) + sum((c.value_base.amount for c in self.cash_balances), Decimal(0))
+        # portfolio_rules.md P-3: 일반 종목 20% / 초우량 예외(사유 명시분) 30% — 서로
+        # 다른 한도이므로 별도 지표로 분리한다(하나로 합치면 Rule Engine이 종목별로
+        # 다른 임계값을 적용할 방법이 없다).
         max_position = max(
             (
                 v.market_value_base.amount
                 for v in self.valuations
                 if not v.asset.asset_class.is_diversification_exempt
+                and not v.asset.is_exceptional_quality
             ),
+            default=Decimal(0),
+        )
+        max_exceptional_position = max(
+            (v.market_value_base.amount for v in self.valuations if v.asset.is_exceptional_quality),
             default=Decimal(0),
         )
         return {
             "equity_weight": equity / total,
             "cash_weight": cash_like / total,
             "max_position_weight": max_position / total,
+            "max_exceptional_position_weight": max_exceptional_position / total,
         }
 
 

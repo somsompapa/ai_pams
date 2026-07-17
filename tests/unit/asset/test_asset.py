@@ -116,3 +116,19 @@ class TestAsset:
         asset = self.make_asset()
         with pytest.raises(AttributeError):
             asset.name = "변경"  # type: ignore[misc]
+
+    def test_no_exceptional_reason_by_default(self) -> None:
+        asset = self.make_asset()
+        assert asset.exceptional_quality_reason is None
+        assert asset.is_exceptional_quality is False
+
+    def test_exceptional_quality_reason_sets_flag(self) -> None:
+        asset = self.make_asset(
+            exceptional_quality_reason="기업 점수 90+ 3분기 연속 유지, 시장 지배력 근거"
+        )
+        assert asset.is_exceptional_quality is True
+
+    def test_empty_exceptional_reason_rejected(self) -> None:
+        """사유 문장 없는 빈 값으로 예외를 켤 수 없다(임의 적용 금지)."""
+        with pytest.raises(DomainValidationError):
+            self.make_asset(exceptional_quality_reason="   ")

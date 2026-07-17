@@ -56,6 +56,7 @@ from pams.equity.domain import (
     ValuationError,
     band_trigger,
     evaluate_buy_gate,
+    evaluate_sell_review,
 )
 from pams.equity.domain.financial_statement import (
     AnnualFinancials,
@@ -84,8 +85,13 @@ from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
 from pams.market_data.infrastructure import CsvPriceLookup, upsert_fx_rate, upsert_price_symbol
 from pams.market_regime.application import GradeMarketRegime
-from pams.market_regime.domain import Grade
-from pams.market_regime.infrastructure import RegimeConfigError, YamlMarketRegimeConfigLoader
+from pams.market_regime.domain import Grade, MarketIndicatorProvider, MarketRegimeProviderError
+from pams.market_regime.infrastructure import (
+    RegimeConfigError,
+    YahooMarketRegimeIndicatorProvider,
+    YamlMarketRegimeConfigLoader,
+)
+from pams.performance.application import ComputeRealizedPerformance
 from pams.portfolio.domain import CashLedger, PositionLedger, Transaction, TransactionType
 from pams.portfolio.infrastructure import CsvDataError, CsvTransactionRepository
 from pams.shared_kernel.domain import (
@@ -210,6 +216,21 @@ class BuyGateRequest(BaseModel):
     investment_thesis: str = ""
 
 
+class SellReviewRequest(BaseModel):
+    """매도 판단 보조(sell_rules.md 5장) 요청. 자동집행 아님 — 신호만 드러낸다.
+
+    S-1(논리훼손, OR): 성장 둔화·점유율 하락·산업구조 변화 중 하나라도 있으면 검토.
+    S-2(과대평가): /api/equity-score dcf.gap.gap_ratio를 그대로 넘기면 +50%/+100%
+    구간에 따라 25%/50% 부분매도를 제안한다.
+    """
+
+    revenue_yoy_growth_deceleration_pp: str | None = None  # 전년 대비 YoY 성장률 둔화폭
+    market_share_declining_two_quarters: bool = False
+    structural_disruption: bool = False
+    structural_disruption_note: str = ""
+    dcf_gap_ratio: str | None = None
+
+
 class TransactionRequest(BaseModel):
     """웹 거래 입력. 숫자는 float 오차를 막기 위해 문자열로 받는다."""
 
@@ -235,6 +256,9 @@ class AssetRequest(BaseModel):
     country: str
     sector: str | None = None
     yahoo_symbol: str | None = None
+    # portfolio_rules.md P-3 초우량 예외(단일종목 20%→30%). 임의 적용 금지 —
+    # 반드시 사유 문장과 함께 설정한다.
+    exceptional_quality_reason: str | None = None
 
 
 class TriggerRequest(BaseModel):
@@ -475,6 +499,7 @@ def create_app(
     as_of_provider: Callable[[], date] | None = None,
     password: str | None = None,
     equity_providers: dict[str, FinancialStatementProvider] | None = None,
+    market_indicator_provider: MarketIndicatorProvider | None = None,
 ) -> FastAPI:
     dashboard_service = service if service is not None else default_dashboard_service()
     as_of = as_of_provider if as_of_provider is not None else _default_as_of
@@ -485,6 +510,7 @@ def create_app(
     journal_repository = JsonlJournalRepository(storage_dir / "journal.jsonl")
     audit_recorder = RecordAuditEvent(trail=JsonlAuditTrail(storage_dir / "audit.jsonl"))
     injected_equity_providers = equity_providers or {}
+    indicator_provider = market_indicator_provider or YahooMarketRegimeIndicatorProvider()
     text_completion = completion if completion is not None else _completion_from_env()
 
     app = FastAPI(title="PAMS", version="0.1.0")
@@ -821,6 +847,11 @@ def create_app(
                 currency=Currency(request.currency),
                 country=request.country.strip(),
                 sector=(request.sector.strip() if request.sector else None),
+                exceptional_quality_reason=(
+                    request.exceptional_quality_reason.strip()
+                    if request.exceptional_quality_reason
+                    else None
+                ),
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=f"잘못된 자산군/통화: {error}") from None
@@ -838,6 +869,7 @@ def create_app(
                     "currency": a.currency.value,
                     "country": a.country,
                     "sector": a.sector or "",
+                    "exceptional_quality_reason": a.exceptional_quality_reason or "",
                 }
                 for a in sorted(assets, key=lambda a: a.asset_id)
             ]
@@ -1405,9 +1437,24 @@ def create_app(
         except RegimeConfigError as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
 
+        vix = _optional_decimal("vix", request.vix)
+        circuit_breaker = _optional_decimal("circuit_breaker", request.circuit_breaker)
+        fetch_errors: list[str] = []
+        # 명시 입력이 있으면 그대로 존중하고, 없을 때만 자동조회를 시도한다(임의 대체 금지).
+        if vix is None:
+            try:
+                vix = indicator_provider.fetch_vix()
+            except MarketRegimeProviderError as error:
+                fetch_errors.append(f"VIX 자동조회 실패: {error}")
+        if circuit_breaker is None:
+            try:
+                circuit_breaker = indicator_provider.fetch_kospi_change_pct()
+            except MarketRegimeProviderError as error:
+                fetch_errors.append(f"KOSPI 등락률 자동조회 실패: {error}")
+
         observations: dict[str, Decimal | str | None] = {
-            "vix": _optional_decimal("vix", request.vix),
-            "circuit_breaker": _optional_decimal("circuit_breaker", request.circuit_breaker),
+            "vix": vix,
+            "circuit_breaker": circuit_breaker,
             "treasury_10y": request.treasury_10y,
             "sp500_per": request.sp500_per,
             "kospi_foreign_flow": request.kospi_foreign_flow,
@@ -1425,6 +1472,7 @@ def create_app(
             "tie_broken": result.tie_broken,
             "action_guidance": result.action_guidance,
             "buy_allowed": result.buy_allowed,
+            "fetch_errors": fetch_errors,
             "grade_tally": {g.value: count for g, count in result.grade_tally.items()},
             "indicator_grades": [
                 {
@@ -1474,6 +1522,88 @@ def create_app(
             "conditions": [
                 {"condition": c.condition, "met": c.met, "detail": c.detail}
                 for c in result.conditions
+            ],
+        }
+
+    @app.post("/api/sell-review")
+    def compute_sell_review(request: SellReviewRequest) -> dict[str, Any]:
+        """매도 판단 보조(sell_rules.md 5장). 신호를 드러낼 뿐 자동집행하지 않는다 —
+        실행 전 사용자 최종 확인 필수(S-4 체크리스트)."""
+        result = evaluate_sell_review(
+            revenue_yoy_growth_deceleration_pp=_optional_decimal(
+                "revenue_yoy_growth_deceleration_pp", request.revenue_yoy_growth_deceleration_pp
+            ),
+            market_share_declining_two_quarters=request.market_share_declining_two_quarters,
+            structural_disruption=request.structural_disruption,
+            structural_disruption_note=request.structural_disruption_note,
+            dcf_gap_ratio=_optional_decimal("dcf_gap_ratio", request.dcf_gap_ratio),
+        )
+        record_audit(
+            actor="user",
+            action="sell_review.evaluated",
+            detail=f"매도 검토: {'권고' if result.review_recommended else '해당 없음'}",
+            reason="웹 매도판정 요청",
+        )
+        return {
+            "review_recommended": result.review_recommended,
+            "thesis_break_triggered": result.thesis_break_triggered,
+            "suggested_sell_fraction": (
+                str(result.suggested_sell_fraction)
+                if result.suggested_sell_fraction is not None
+                else None
+            ),
+            "thesis_break_signals": [
+                {"reason": s.reason, "triggered": s.triggered, "detail": s.detail}
+                for s in result.thesis_break_signals
+            ],
+            "overvaluation_signal": {
+                "reason": result.overvaluation_signal.reason,
+                "triggered": result.overvaluation_signal.triggered,
+                "detail": result.overvaluation_signal.detail,
+            },
+        }
+
+    @app.get("/api/realized-performance")
+    def get_realized_performance() -> dict[str, Any]:
+        """실제 거래 원장(Transaction)을 FIFO로 랏 매칭해 실현 CAGR·MDD를 산출한다.
+        PositionLedger의 이동평균 회계와는 별개의 사후 성과분석 관점이다."""
+        _require_real_mode()
+        transactions = _transaction_repository().list_all()
+        report = ComputeRealizedPerformance().execute(transactions)
+        return {
+            "note": report.note,
+            "n_open_lots": report.n_open_lots,
+            "by_currency": [
+                {
+                    "currency": r.currency.value,
+                    "n_closed_lots": r.n_closed_lots,
+                    "total_cost": str(r.total_cost),
+                    "total_proceeds": str(r.total_proceeds),
+                    "total_realized_pnl": str(r.total_realized_pnl),
+                    "realized_return_pct": (
+                        str(r.realized_return_pct) if r.realized_return_pct is not None else None
+                    ),
+                    "capital_weighted_cagr": (
+                        _ratio_str(r.capital_weighted_cagr)
+                        if r.capital_weighted_cagr is not None
+                        else None
+                    ),
+                    "realized_pnl_drawdown_approx": (
+                        _ratio_str(r.realized_pnl_drawdown_approx)
+                        if r.realized_pnl_drawdown_approx is not None
+                        else None
+                    ),
+                }
+                for r in report.by_currency
+            ],
+            "skipped": [
+                {
+                    "transaction_id": s.transaction_id,
+                    "asset_id": s.asset_id,
+                    "trade_date": s.trade_date.isoformat(),
+                    "reason": s.reason,
+                }
+                for s in report.skipped
             ],
         }
 

@@ -51,6 +51,7 @@ from pams.equity.domain.scoring_engine import (
     score_risk,
     score_valuation,
 )
+from pams.equity.domain.sell_review import SellReviewResult, SellSignal, evaluate_sell_review
 from pams.equity.domain.trigger import (
     EvaluatePriceTriggers,
     PriceTrigger,
@@ -86,6 +87,8 @@ __all__ = [
     "RiskDeduction",
     "ScoreItem",
     "ScoringConfig",
+    "SellReviewResult",
+    "SellSignal",
     "StockAllocationReport",
     "StockAllocationRow",
     "StockSignal",
@@ -100,6 +103,7 @@ __all__ = [
     "compute_growth_metrics",
     "dcf_sensitivity",
     "evaluate_buy_gate",
+    "evaluate_sell_review",
     "project_fcf",
     "relative_valuation_score",
     "score_company",

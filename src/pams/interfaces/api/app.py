@@ -91,6 +91,7 @@ from pams.market_regime.infrastructure import (
     YahooMarketRegimeIndicatorProvider,
     YamlMarketRegimeConfigLoader,
 )
+from pams.performance.application import ComputeRealizedPerformance
 from pams.portfolio.domain import CashLedger, PositionLedger, Transaction, TransactionType
 from pams.portfolio.infrastructure import CsvDataError, CsvTransactionRepository
 from pams.shared_kernel.domain import (
@@ -1551,6 +1552,50 @@ def create_app(
                 "triggered": result.overvaluation_signal.triggered,
                 "detail": result.overvaluation_signal.detail,
             },
+        }
+
+    @app.get("/api/realized-performance")
+    def get_realized_performance() -> dict[str, Any]:
+        """실제 거래 원장(Transaction)을 FIFO로 랏 매칭해 실현 CAGR·MDD를 산출한다.
+        PositionLedger의 이동평균 회계와는 별개의 사후 성과분석 관점이다."""
+        _require_real_mode()
+        transactions = _transaction_repository().list_all()
+        report = ComputeRealizedPerformance().execute(transactions)
+        return {
+            "note": report.note,
+            "n_open_lots": report.n_open_lots,
+            "by_currency": [
+                {
+                    "currency": r.currency.value,
+                    "n_closed_lots": r.n_closed_lots,
+                    "total_cost": str(r.total_cost),
+                    "total_proceeds": str(r.total_proceeds),
+                    "total_realized_pnl": str(r.total_realized_pnl),
+                    "realized_return_pct": (
+                        str(r.realized_return_pct) if r.realized_return_pct is not None else None
+                    ),
+                    "capital_weighted_cagr": (
+                        _ratio_str(r.capital_weighted_cagr)
+                        if r.capital_weighted_cagr is not None
+                        else None
+                    ),
+                    "realized_pnl_drawdown_approx": (
+                        _ratio_str(r.realized_pnl_drawdown_approx)
+                        if r.realized_pnl_drawdown_approx is not None
+                        else None
+                    ),
+                }
+                for r in report.by_currency
+            ],
+            "skipped": [
+                {
+                    "transaction_id": s.transaction_id,
+                    "asset_id": s.asset_id,
+                    "trade_date": s.trade_date.isoformat(),
+                    "reason": s.reason,
+                }
+                for s in report.skipped
+            ],
         }
 
     @app.get("/api/health")

@@ -577,6 +577,17 @@
   </section>
 
   <section class="card wide" data-tab="journal">
+    <h2>실현 성과 (FIFO 랏매칭)</h2>
+    <p class="empty" style="margin-top:0">
+      거래 원장(BUY/SELL)을 선입선출(FIFO)로 랏매칭해 청산된 랏의 원금가중 CAGR과
+      청산시점 누적손익 기준 근사 MDD를 통화별로 계산한다. 포트폴리오 화면의
+      이동평균 원가법과는 별개의 사후 성과분석 관점이다.
+    </p>
+    <button type="button" id="rp-load">실현 성과 조회</button>
+    <div id="rp-output" class="empty">아직 조회하지 않았다.</div>
+  </section>
+
+  <section class="card wide" data-tab="journal">
     <h2>감사 로그 (최근 활동)</h2>
     <div class="tx-filters">
       <label><input type="checkbox" id="audit-today-only" checked> 오늘만</label>
@@ -1599,6 +1610,38 @@ guardSubmit(el("sr-form"), async () => {
     el("sr-output").className = "empty";
     el("sr-output").textContent = body.detail ?? ("실패 (" + response.status + ")");
   }
+});
+
+el("rp-load").addEventListener("click", async () => {
+  el("rp-output").className = "empty";
+  el("rp-output").textContent = "조회 중…";
+
+  const response = await fetch("/api/realized-performance");
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    el("rp-output").textContent = body.detail ?? ("실패 (" + response.status + ")");
+    return;
+  }
+  if (!body.by_currency.length) {
+    el("rp-output").textContent = "청산된 랏이 없다(FIFO 매칭 기준) — 판단 보류.";
+    return;
+  }
+  const rows = body.by_currency.map((r) => [
+    r.currency, r.n_closed_lots, r.total_cost, r.total_realized_pnl,
+    (r.realized_return_pct ?? "—") + "%",
+    r.capital_weighted_cagr ?? "—", r.realized_pnl_drawdown_approx ?? "—",
+  ]);
+  const table = "<table><thead><tr><th>통화</th><th>청산랏수</th><th>원금</th><th>실현손익</th>" +
+    "<th>실현수익률</th><th>원금가중CAGR</th><th>근사MDD</th></tr></thead><tbody>" +
+    rows.map((r) => "<tr>" + r.map((c) => "<td>" + esc(c) + "</td>").join("") + "</tr>").join("") +
+    "</tbody></table>";
+  const skippedHtml = body.skipped.length
+    ? "<p class=\"empty\">건너뜀: " + body.skipped.map((s) => esc(s.asset_id + " " + s.trade_date + " — " + s.reason)).join(" / ") + "</p>"
+    : "";
+  el("rp-output").className = "";
+  el("rp-output").innerHTML =
+    table + "<p>미청산 랏 " + body.n_open_lots + "개</p>" + skippedHtml +
+    "<p class=\"empty\">" + esc(body.note) + "</p>";
 });
 </script>
 </body>

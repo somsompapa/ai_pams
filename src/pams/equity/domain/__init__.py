@@ -27,6 +27,13 @@ from pams.equity.domain.dcf import (
     trigger_zones,
     valuation_gap,
 )
+from pams.equity.domain.financial_statement import (
+    AnnualFinancials,
+    AnnualFinancialsResult,
+    FinancialStatementProvider,
+    FinancialStatementProviderError,
+)
+from pams.equity.domain.growth_metrics import GrowthMetrics, compute_growth_metrics
 from pams.equity.domain.score import (
     CategoryScore,
     CompanyScoreReport,
@@ -55,6 +62,8 @@ from pams.equity.domain.trigger import (
 )
 
 __all__ = [
+    "AnnualFinancials",
+    "AnnualFinancialsResult",
     "Band",
     "BandDirection",
     "BandTable",
@@ -68,6 +77,9 @@ __all__ = [
     "EntryBarrierConfig",
     "EvaluatePriceTriggers",
     "EvaluateStockAllocation",
+    "FinancialStatementProvider",
+    "FinancialStatementProviderError",
+    "GrowthMetrics",
     "PriceTrigger",
     "PriceTriggerPlan",
     "PriceTriggerReport",
@@ -87,6 +99,7 @@ __all__ = [
     "Verdict",
     "band_trigger",
     "calculate_dcf",
+    "compute_growth_metrics",
     "dcf_sensitivity",
     "project_fcf",
     "score_company",

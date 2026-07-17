@@ -56,6 +56,7 @@ from pams.equity.domain import (
     ValuationError,
     band_trigger,
     evaluate_buy_gate,
+    evaluate_sell_review,
 )
 from pams.equity.domain.financial_statement import (
     AnnualFinancials,
@@ -208,6 +209,21 @@ class BuyGateRequest(BaseModel):
     dcf_gap_ratio: str | None = None  # /api/equity-score dcf.gap.gap_ratio
     market_grade: Literal["A", "B", "C", "D", "E"] | None = None  # /api/market-regime final_grade
     investment_thesis: str = ""
+
+
+class SellReviewRequest(BaseModel):
+    """매도 판단 보조(sell_rules.md 5장) 요청. 자동집행 아님 — 신호만 드러낸다.
+
+    S-1(논리훼손, OR): 성장 둔화·점유율 하락·산업구조 변화 중 하나라도 있으면 검토.
+    S-2(과대평가): /api/equity-score dcf.gap.gap_ratio를 그대로 넘기면 +50%/+100%
+    구간에 따라 25%/50% 부분매도를 제안한다.
+    """
+
+    revenue_yoy_growth_deceleration_pp: str | None = None  # 전년 대비 YoY 성장률 둔화폭
+    market_share_declining_two_quarters: bool = False
+    structural_disruption: bool = False
+    structural_disruption_note: str = ""
+    dcf_gap_ratio: str | None = None
 
 
 class TransactionRequest(BaseModel):
@@ -1475,6 +1491,44 @@ def create_app(
                 {"condition": c.condition, "met": c.met, "detail": c.detail}
                 for c in result.conditions
             ],
+        }
+
+    @app.post("/api/sell-review")
+    def compute_sell_review(request: SellReviewRequest) -> dict[str, Any]:
+        """매도 판단 보조(sell_rules.md 5장). 신호를 드러낼 뿐 자동집행하지 않는다 —
+        실행 전 사용자 최종 확인 필수(S-4 체크리스트)."""
+        result = evaluate_sell_review(
+            revenue_yoy_growth_deceleration_pp=_optional_decimal(
+                "revenue_yoy_growth_deceleration_pp", request.revenue_yoy_growth_deceleration_pp
+            ),
+            market_share_declining_two_quarters=request.market_share_declining_two_quarters,
+            structural_disruption=request.structural_disruption,
+            structural_disruption_note=request.structural_disruption_note,
+            dcf_gap_ratio=_optional_decimal("dcf_gap_ratio", request.dcf_gap_ratio),
+        )
+        record_audit(
+            actor="user",
+            action="sell_review.evaluated",
+            detail=f"매도 검토: {'권고' if result.review_recommended else '해당 없음'}",
+            reason="웹 매도판정 요청",
+        )
+        return {
+            "review_recommended": result.review_recommended,
+            "thesis_break_triggered": result.thesis_break_triggered,
+            "suggested_sell_fraction": (
+                str(result.suggested_sell_fraction)
+                if result.suggested_sell_fraction is not None
+                else None
+            ),
+            "thesis_break_signals": [
+                {"reason": s.reason, "triggered": s.triggered, "detail": s.detail}
+                for s in result.thesis_break_signals
+            ],
+            "overvaluation_signal": {
+                "reason": result.overvaluation_signal.reason,
+                "triggered": result.overvaluation_signal.triggered,
+                "detail": result.overvaluation_signal.detail,
+            },
         }
 
     @app.get("/api/health")

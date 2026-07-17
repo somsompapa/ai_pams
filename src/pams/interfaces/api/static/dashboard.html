@@ -48,6 +48,7 @@
   .card {
     background: var(--card); border: 1px solid var(--line);
     border-radius: 0.8rem; padding: 1rem 1.2rem;
+    overflow-x: auto; /* 표·긴 콘텐츠가 카드 안에서만 스크롤되게(모바일 화면 잘림 방지) */
   }
   .card h2 { font-size: 0.95rem; margin: 0 0 0.8rem; color: var(--muted); }
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.8rem; }
@@ -75,10 +76,14 @@
   td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .holdings-scroll { overflow-x: auto; }
   #holdings-table, #stocks-table { min-width: 720px; }
-  nav#tabs { max-width: 1100px; margin: 0 auto; padding: 0 1rem; display: flex; gap: 0.4rem; flex-wrap: wrap; }
+  nav#tabs {
+    max-width: 1100px; margin: 0 auto; padding: 0 1rem; display: flex; gap: 0.4rem;
+    flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin;
+  }
   .tab-btn {
     background: transparent; border: 1px solid var(--line); color: var(--muted);
     padding: 0.5rem 1rem; border-radius: 0.6rem 0.6rem 0 0; cursor: pointer; font-size: 0.9rem;
+    flex: none; white-space: nowrap;
   }
   .tab-btn.active { background: var(--card); color: var(--text); font-weight: 600; border-bottom-color: var(--card); }
   main section[data-tab] { display: none; }
@@ -155,6 +160,22 @@
   .journal-entry { border-top: 1px solid var(--line); padding: 0.5rem 0; font-size: 0.85rem; }
   .journal-entry .head { display: flex; justify-content: space-between; color: var(--muted); }
   footer { text-align: center; color: var(--muted); font-size: 0.75rem; padding: 1rem; }
+
+  /* 모바일: 여백 축소, 터치 영역 확대, 입력 폰트 16px(iOS 자동확대 방지), 안전한 1열 배치 */
+  @media (max-width: 640px) {
+    header { padding: 0.8rem 1rem; }
+    header h1 { font-size: 1rem; }
+    main { padding: 0.8rem 0.8rem 2.5rem; gap: 0.8rem; grid-template-columns: 1fr; }
+    .card { padding: 0.9rem 0.9rem; }
+    nav#tabs { padding: 0 0.8rem; }
+    select, input, textarea, form button, .tx-form button, .tx-filters button {
+      font-size: 16px; padding: 0.6rem 0.7rem; min-height: 2.6rem;
+    }
+    .tx-form input, .tx-filters input#tx-filter-text { width: 100%; }
+    button, .tab-btn, .stock-move { min-height: 2.4rem; }
+    table { font-size: 0.8rem; }
+    th, td { padding: 0.35rem 0.4rem; }
+  }
 </style>
 </head>
 <body>
@@ -173,7 +194,7 @@
   <button type="button" class="tab-btn" data-tab="manage">관리</button>
   <button type="button" class="tab-btn" data-tab="analysis">분석</button>
   <button type="button" class="tab-btn" data-tab="equity">종목분석</button>
-  <button type="button" class="tab-btn" data-tab="market-regime">시장국면</button>
+  <button type="button" class="tab-btn" data-tab="market-regime">매매판정</button>
   <button type="button" class="tab-btn" data-tab="journal">일지·AI</button>
 </nav>
 
@@ -393,23 +414,16 @@
       </div>
       <label><input type="checkbox" id="eq-is-financial"> 금융업(은행/보험/증권/지주) — 매출·매출총이익률 대신 총자산 CAGR·ROA 사용</label>
 
-      <h3>DCF 가정</h3>
+      <h3>DCF 가정 <span class="empty">(기본값 채워짐 — 그대로 쓰거나 수정)</span></h3>
       <div class="grid2">
-        <input id="eq-wacc" placeholder="WACC (%, 예: 8.5)" required>
-        <input id="eq-terminal-growth" placeholder="영구성장률 g (%, 예: 2.5)" required>
-        <input id="eq-growth-path" placeholder="예측기간 성장률(%, 콤마구분, 예: 12,12,10,8,8)" required>
+        <input id="eq-wacc" placeholder="WACC (%)" value="8.5" required>
+        <input id="eq-terminal-growth" placeholder="영구성장률 g (%)" value="2.5" required>
+        <input id="eq-growth-path" placeholder="예측기간 성장률(%, 콤마구분)" value="10,10,8,8,8" required>
         <input id="eq-shares" placeholder="발행주식수 (없으면 주당가치 생략)">
-        <input id="eq-net-debt" placeholder="순부채 (기본 0, 순현금이면 음수)">
+        <input id="eq-net-debt" placeholder="순부채 (기본 0, 순현금이면 음수)" value="0">
         <input id="eq-current-price" placeholder="현재가 (있으면 괴리율 계산)">
       </div>
-      <input id="eq-wacc-basis" placeholder="WACC 근거 (예: CAPM 10.3%+세후부채3.5%→8.5%)">
-
-      <h3>상대지표(PER/PBR/PEG) — DCF 교차검증 보조, 절대 기준 아님</h3>
-      <div class="grid2">
-        <input id="eq-per-pct" placeholder="PER 5년밴드 백분위(%, 0=최하단~100=최상단)">
-        <input id="eq-pbr-pct" placeholder="PBR 5년밴드 백분위(%, 0=최하단~100=최상단)">
-        <input id="eq-peg" placeholder="PEG (=PER÷EPS성장률%, 예: 0.8)">
-      </div>
+      <input id="eq-wacc-basis" placeholder="WACC 근거 (예: CAPM 10.3%+세후부채3.5%→8.5%, 기본값 사용 시 비워도 됨)">
 
       <h3>성장성 · 경쟁력</h3>
       <div class="grid2">
@@ -447,41 +461,33 @@
         <input id="eq-debt-ratio" placeholder="부채비율(총부채/자기자본, %) — 비금융업만">
       </div>
 
-      <h3>리스크 (해당 시 체크, 근거는 선택)</h3>
-      <div class="grid2">
-        <label><input type="checkbox" id="eq-risk-regulatory"> 규제 리스크 확대(-3)</label>
-        <label><input type="checkbox" id="eq-risk-competition"> 경쟁 심화 신호(-3)</label>
-        <label><input type="checkbox" id="eq-risk-cyclical"> 경기민감업종&후행국면(-2)</label>
-        <label><input type="checkbox" id="eq-risk-governance"> 경영진 리스크 이슈(-2)</label>
-      </div>
-      <input id="eq-risk-basis" placeholder="리스크 근거 (선택, 체크한 항목 공통 적용)">
+      <details class="sub-form">
+        <summary>＋ 상대지표(PER/PBR/PEG) — 선택, DCF 교차검증 보조</summary>
+        <div class="grid2">
+          <input id="eq-per-pct" placeholder="PER 5년밴드 백분위(%, 0=최하단~100=최상단)">
+          <input id="eq-pbr-pct" placeholder="PBR 5년밴드 백분위(%, 0=최하단~100=최상단)">
+          <input id="eq-peg" placeholder="PEG (=PER÷EPS성장률%, 예: 0.8)">
+        </div>
+      </details>
+
+      <details class="sub-form">
+        <summary>＋ 리스크 — 해당 시 체크(선택)</summary>
+        <div class="grid2">
+          <label><input type="checkbox" id="eq-risk-regulatory"> 규제 리스크 확대(-3)</label>
+          <label><input type="checkbox" id="eq-risk-competition"> 경쟁 심화 신호(-3)</label>
+          <label><input type="checkbox" id="eq-risk-cyclical"> 경기민감업종&후행국면(-2)</label>
+          <label><input type="checkbox" id="eq-risk-governance"> 경영진 리스크 이슈(-2)</label>
+        </div>
+        <input id="eq-risk-basis" placeholder="리스크 근거 (선택, 체크한 항목 공통 적용)">
+      </details>
 
       <button type="submit">점수 계산</button>
     </form>
     <div id="eq-output" class="empty">아직 계산 결과가 없다.</div>
   </section>
 
-  <section class="card wide" data-tab="equity">
-    <h2>매도 검토 (sell_rules.md 5장 — 자동집행 아님)</h2>
-    <p class="empty" style="margin-top:0">
-      매도는 논리 훼손이 최우선이다. 아래 신호는 검토를 권고할 뿐이며, 실행 전
-      반드시 사용자가 직접 확인한다. DCF 괴리율은 위 종목분석 결과에서 자동으로 채워진다.
-    </p>
-    <form id="sr-form">
-      <input id="sr-growth-decel" placeholder="매출 YoY 성장률 둔화폭(%p, 예: 6 = 전년 대비 6%p 둔화)">
-      <div class="grid2">
-        <label><input type="checkbox" id="sr-share-decline"> 시장점유율 2분기 연속 하락</label>
-        <label><input type="checkbox" id="sr-structural"> 산업 구조 변화(대체재·기술전환 등)</label>
-      </div>
-      <input id="sr-structural-note" placeholder="산업 구조 변화 근거(체크 시)">
-      <input id="sr-dcf-gap" placeholder="DCF 괴리율 (예: 0.6 = +60%, 종목분석에서 자동 채움)">
-      <button type="submit">매도 검토</button>
-    </form>
-    <div id="sr-output" class="empty">아직 검토 결과가 없다.</div>
-  </section>
-
   <section class="card wide" data-tab="market-regime">
-    <h2>시장 국면 판정 (market_analysis_rules.md 4장)</h2>
+    <h2>① 시장 국면 판정 (market_analysis_rules.md 4장)</h2>
     <p class="empty" style="margin-top:0">
       5개 지표를 다수결(동률이면 더 위험한 쪽 채택)로 A(강세)~E(위기) 등급을 매긴다.
       3개 미만 입력되면 "판단 보류"로 응답한다(임의 등급 부여 금지). 매수 필수조건(5장)의
@@ -525,10 +531,10 @@
   </section>
 
   <section class="card wide" data-tab="market-regime">
-    <h2>매수 필수조건 판정 (buy_rules.md B-1 — AND 게이트)</h2>
+    <h2>② 매수 필수조건 판정 (buy_rules.md B-1 — AND 게이트)</h2>
     <p class="empty" style="margin-top:0">
-      4개 조건을 모두 충족해야 매수 후보다. 위 "종목분석"·"시장국면" 탭에서 계산한 값이
-      자동으로 채워진다 — 그대로 쓰거나 직접 고쳐도 된다. 매수 전 B-3 체크리스트의
+      4개 조건을 모두 충족해야 매수 후보다. "종목분석" 탭·위 시장국면 판정에서 계산한
+      값이 자동으로 채워진다 — 그대로 쓰거나 직접 고쳐도 된다. 매수 전 B-3 체크리스트의
       포트폴리오 집중도 한도(개별 20%, 초우량 예외 30%)는 이 4개 조건에는 포함되지
       않는다 — "분석" 탭의 알림(규정준수 위반)에서 별도로 확인한다.
     </p>
@@ -549,6 +555,25 @@
       <button type="submit">매수 게이트 판정</button>
     </form>
     <div id="bg-output" class="empty">아직 판정 결과가 없다.</div>
+  </section>
+
+  <section class="card wide" data-tab="market-regime">
+    <h2>③ 매도 검토 (sell_rules.md 5장 — 자동집행 아님)</h2>
+    <p class="empty" style="margin-top:0">
+      매도는 논리 훼손이 최우선이다. 아래 신호는 검토를 권고할 뿐이며, 실행 전
+      반드시 사용자가 직접 확인한다. DCF 괴리율은 "종목분석" 탭 결과에서 자동으로 채워진다.
+    </p>
+    <form id="sr-form">
+      <input id="sr-growth-decel" placeholder="매출 YoY 성장률 둔화폭(%p, 예: 6 = 전년 대비 6%p 둔화)">
+      <div class="grid2">
+        <label><input type="checkbox" id="sr-share-decline"> 시장점유율 2분기 연속 하락</label>
+        <label><input type="checkbox" id="sr-structural"> 산업 구조 변화(대체재·기술전환 등)</label>
+      </div>
+      <input id="sr-structural-note" placeholder="산업 구조 변화 근거(체크 시)">
+      <input id="sr-dcf-gap" placeholder="DCF 괴리율 (예: 0.6 = +60%, 종목분석에서 자동 채움)">
+      <button type="submit">매도 검토</button>
+    </form>
+    <div id="sr-output" class="empty">아직 검토 결과가 없다.</div>
   </section>
 
   <section class="card" data-tab="journal">

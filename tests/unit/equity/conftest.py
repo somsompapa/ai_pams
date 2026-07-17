@@ -8,6 +8,7 @@ from decimal import Decimal
 
 import pytest
 
+from pams.equity.domain.relative_valuation import RelativeValuationConfig
 from pams.equity.domain.scoring_config import EntryBarrierConfig, RiskConfig, ScoringConfig
 from pams.shared_kernel.domain import (
     Band,
@@ -142,6 +143,32 @@ def scoring_config() -> ScoringConfig:
                 Band(bound=Decimal("1.0"), score=Decimal(3), label="≤100%"),
                 Band(bound=Decimal("2.0"), score=Decimal(1), label="100~200%"),
                 Band(bound=Decimal("Infinity"), score=Decimal(0), label=">200%"),
+            ),
+        ),
+        relative_valuation=RelativeValuationConfig(
+            per_max_score=Decimal(5),
+            pbr_max_score=Decimal(3),
+            percentile_ratio=BandTable(
+                metric="PER/PBR 5년밴드 백분위→배점비율",
+                max_score=Decimal(1),
+                direction=BandDirection.LOWER_IS_BETTER,
+                bands=(
+                    Band(bound=Decimal("0.20"), score=Decimal("1.00"), label="하위 20% 이내"),
+                    Band(bound=Decimal("0.40"), score=Decimal("0.75"), label="20~40%"),
+                    Band(bound=Decimal("0.60"), score=Decimal("0.50"), label="40~60%(중간)"),
+                    Band(bound=Decimal("0.80"), score=Decimal("0.25"), label="60~80%"),
+                    Band(bound=Decimal("Infinity"), score=Decimal("0.00"), label="80% 초과(상단)"),
+                ),
+            ),
+            peg_adjustment=BandTable(
+                metric="PEG 보정",
+                max_score=Decimal(2),
+                direction=BandDirection.LOWER_IS_BETTER,
+                bands=(
+                    Band(bound=Decimal("1.0"), score=Decimal(2), label="<1.0"),
+                    Band(bound=Decimal("2.0"), score=Decimal(0), label="1.0~2.0"),
+                    Band(bound=Decimal("Infinity"), score=Decimal(-2), label=">2.0"),
+                ),
             ),
         ),
         risk=RiskConfig(

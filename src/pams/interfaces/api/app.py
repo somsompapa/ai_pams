@@ -41,7 +41,12 @@ from pams.asset.infrastructure import (
 from pams.audit.application import RecordAuditEvent
 from pams.audit.domain import AuditEvent
 from pams.audit.infrastructure import JsonlAuditTrail
-from pams.equity.application import CalculateDcf, LoadGrowthMetrics, ScoreCompany
+from pams.equity.application import (
+    CalculateDcf,
+    CalculateRelativeValuation,
+    LoadGrowthMetrics,
+    ScoreCompany,
+)
 from pams.equity.domain import (
     CompanyScoreInputs,
     DcfAssumptions,
@@ -144,6 +149,12 @@ class EquityScoreRequest(BaseModel):
     shares_outstanding: str | None = None
     current_price: str | None = None
     wacc_basis: str = ""
+
+    # 3-4 밸류에이션 상대지표(PER/PBR/PEG) — DCF 교차검증 보조, 절대 기준 아님.
+    # 백분위는 해당 종목 자신의 과거 5년 PER/PBR 밴드 내 위치(0~1, 업종 평균 아님).
+    per_band_percentile: str | None = None
+    pbr_band_percentile: str | None = None
+    peg: str | None = None
 
     # 3-1 성장성 (매출/총자산 CAGR·EPS CAGR·FCF흑자연도는 조회된 재무제표로 자동 계산)
     industry_tam_cagr: str | None = None
@@ -1266,6 +1277,34 @@ def create_app(
             for d in request.risk_deductions
         )
 
+        try:
+            scoring_config = YamlScoringConfigLoader(
+                dashboard_service.config_dir / "equity_scoring" / "default.yaml"
+            ).load()
+        except ScoringConfigError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+
+        relative_valuation = CalculateRelativeValuation(
+            config=scoring_config.relative_valuation
+        ).execute(
+            per_band_percentile=_optional_decimal(
+                "per_band_percentile", request.per_band_percentile
+            ),
+            pbr_band_percentile=_optional_decimal(
+                "pbr_band_percentile", request.pbr_band_percentile
+            ),
+            peg=_optional_decimal("peg", request.peg),
+        )
+        # 세 입력이 전부 미제공이면 "0점짜리 상대지표"가 아니라 DCF와 동일하게
+        # 미산출로 처리한다(데이터 누락을 숨기지 않는다 — score_valuation()의 _missing()).
+        relative_valuation_input_score = (
+            None
+            if request.per_band_percentile is None
+            and request.pbr_band_percentile is None
+            and request.peg is None
+            else relative_valuation.score
+        )
+
         inputs = CompanyScoreInputs(
             symbol=request.asset_id,
             as_of=as_of(),
@@ -1310,15 +1349,9 @@ def create_app(
                 else _optional_decimal("debt_ratio", request.debt_ratio)
             ),
             dcf_valuation_score=dcf_score,
+            relative_valuation_score=relative_valuation_input_score,
             risk_deductions=risk_deductions,
         )
-
-        try:
-            scoring_config = YamlScoringConfigLoader(
-                dashboard_service.config_dir / "equity_scoring" / "default.yaml"
-            ).load()
-        except ScoringConfigError as error:
-            raise HTTPException(status_code=500, detail=str(error)) from error
 
         score_report = ScoreCompany(config=scoring_config).execute(inputs)
         record_audit(
@@ -1344,6 +1377,22 @@ def create_app(
                 "roe_latest": _ratio_str(metrics.roe_latest),
             },
             "dcf": dcf_payload,
+            "relative_valuation": {
+                "score": str(relative_valuation.score),
+                "per_score": (
+                    str(relative_valuation.per_score)
+                    if relative_valuation.per_score is not None
+                    else None
+                ),
+                "pbr_score": (
+                    str(relative_valuation.pbr_score)
+                    if relative_valuation.pbr_score is not None
+                    else None
+                ),
+                "peg_adjustment": str(relative_valuation.peg_adjustment),
+                "missing": list(relative_valuation.missing),
+                "note": relative_valuation.note,
+            },
         }
 
     @app.post("/api/market-regime")

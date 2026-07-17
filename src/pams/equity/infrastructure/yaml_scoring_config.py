@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from pams.equity.domain.relative_valuation import RelativeValuationConfig
 from pams.equity.domain.scoring_config import EntryBarrierConfig, RiskConfig, ScoringConfig
 from pams.shared_kernel.domain import (
     Band,
@@ -33,6 +34,7 @@ class YamlScoringConfigLoader:
             growth = self._require(document, "growth")
             competitiveness = self._require(document, "competitiveness")
             financials = self._require(document, "financials")
+            valuation = self._require(document, "valuation")
             risk = self._require(document, "risk")
 
             return ScoringConfig(
@@ -70,6 +72,7 @@ class YamlScoringConfigLoader:
                     "financials.fcf_positive_years", financials["fcf_positive_years"]
                 ),
                 debt_ratio=self._band_table("financials.debt_ratio", financials["debt_ratio"]),
+                relative_valuation=self._relative_valuation(valuation["relative_valuation"]),
                 risk=self._risk_config(risk),
             )
         except (DomainError, KeyError, ValueError) as error:
@@ -146,6 +149,22 @@ class YamlScoringConfigLoader:
             ),
             network_effect_points=self._decimal(
                 "entry_barrier.network_effect_points", node["network_effect_points"]
+            ),
+        )
+
+    def _relative_valuation(self, node: dict[str, Any]) -> RelativeValuationConfig:
+        return RelativeValuationConfig(
+            per_max_score=self._decimal(
+                "valuation.relative_valuation.per_max_score", node["per_max_score"]
+            ),
+            pbr_max_score=self._decimal(
+                "valuation.relative_valuation.pbr_max_score", node["pbr_max_score"]
+            ),
+            percentile_ratio=self._band_table(
+                "valuation.relative_valuation.percentile_ratio", node["percentile_ratio"]
+            ),
+            peg_adjustment=self._band_table(
+                "valuation.relative_valuation.peg_adjustment", node["peg_adjustment"]
             ),
         )
 

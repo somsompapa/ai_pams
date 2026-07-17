@@ -496,6 +496,31 @@
     <div id="mr-output" class="empty">아직 판정 결과가 없다.</div>
   </section>
 
+  <section class="card wide" data-tab="market-regime">
+    <h2>매수 필수조건 판정 (buy_rules.md B-1 — AND 게이트)</h2>
+    <p class="empty" style="margin-top:0">
+      4개 조건을 모두 충족해야 매수 후보다. 위 "종목분석"·"시장국면" 탭에서 계산한 값이
+      자동으로 채워진다 — 그대로 쓰거나 직접 고쳐도 된다.
+    </p>
+    <form id="bg-form">
+      <div class="grid2">
+        <input id="bg-total-score" placeholder="기업 점수 (0~100)" required>
+        <input id="bg-dcf-gap" placeholder="DCF 괴리율 (예: -0.15 = -15%)">
+      </div>
+      <select id="bg-market-grade">
+        <option value="">시장 등급 — 선택 안 함(미확보 시 조건2 미충족)</option>
+        <option value="A">A</option>
+        <option value="B">B</option>
+        <option value="C">C</option>
+        <option value="D">D</option>
+        <option value="E">E</option>
+      </select>
+      <textarea id="bg-thesis" placeholder="투자 논리 (1문장 이상, 예: 3년 내 매출 CAGR 15% 지속 가능, 근거: OO)" rows="2" required></textarea>
+      <button type="submit">매수 게이트 판정</button>
+    </form>
+    <div id="bg-output" class="empty">아직 판정 결과가 없다.</div>
+  </section>
+
   <section class="card" data-tab="journal">
     <h2>AI 해설 (참고용 — 계산·판단에 관여하지 않음)</h2>
     <div class="ai-controls">
@@ -1347,6 +1372,10 @@ function renderEquityScore(body) {
     "<p>매수 점수조건(≥80점) 충족: " + (score.buy_score_condition_met ? "예" : "아니오") +
     " · 데이터 품질 플래그: " + esc(flags) + "</p>" +
     dcfHtml + table;
+
+  el("bg-total-score").value = score.total_score;
+  const gapRatio = body.dcf && body.dcf.gap ? body.dcf.gap.gap_ratio : "";
+  if (gapRatio) el("bg-dcf-gap").value = gapRatio;
 }
 
 guardSubmit(el("eq-form"), async () => {
@@ -1419,6 +1448,8 @@ function renderMarketRegime(body) {
     "<p>매수 조건2(시장 상태 C 이상) 충족: " + (body.buy_allowed ? "예" : "아니오") +
     (body.tie_broken ? " · 동률 발생 → 보수적(위험 쪽) 등급 채택" : "") +
     "</p><p>집계: " + esc(tally) + "</p>" + table;
+
+  el("bg-market-grade").value = body.final_grade;
 }
 
 guardSubmit(el("mr-form"), async () => {
@@ -1444,6 +1475,42 @@ guardSubmit(el("mr-form"), async () => {
   } else {
     el("mr-output").className = "empty";
     el("mr-output").textContent = body.detail ?? ("실패 (" + response.status + ")");
+  }
+});
+
+function renderBuyGate(body) {
+  const rows = body.conditions.map((c) => [c.condition, c.met ? "충족" : "미충족", c.detail]);
+  const table = "<table><thead><tr><th>조건</th><th>충족 여부</th><th>근거</th></tr></thead><tbody>" +
+    rows.map((r) => "<tr>" + r.map((c) => "<td>" + esc(c) + "</td>").join("") + "</tr>").join("") +
+    "</tbody></table>";
+  el("bg-output").className = "";
+  el("bg-output").innerHTML =
+    "<h3>" + (body.all_conditions_met ? "매수 후보 (4개 조건 모두 충족)" : "매수 금지 (미충족 조건 있음)") + "</h3>" +
+    table;
+}
+
+guardSubmit(el("bg-form"), async () => {
+  el("bg-output").className = "empty";
+  el("bg-output").textContent = "판정 중…";
+
+  const payload = {
+    total_score: raw("bg-total-score"),
+    dcf_gap_ratio: raw("bg-dcf-gap"),
+    market_grade: el("bg-market-grade").value || null,
+    investment_thesis: el("bg-thesis").value,
+  };
+
+  const response = await fetch("/api/buy-gate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (response.ok) {
+    renderBuyGate(body);
+  } else {
+    el("bg-output").className = "empty";
+    el("bg-output").textContent = body.detail ?? ("실패 (" + response.status + ")");
   }
 });
 </script>

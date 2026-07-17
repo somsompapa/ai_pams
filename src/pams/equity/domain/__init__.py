@@ -8,6 +8,7 @@ from pams.equity.domain.allocation import (
     StockTarget,
     StockTargetPlan,
 )
+from pams.equity.domain.buy_gate import BuyGateCondition, BuyGateResult, evaluate_buy_gate
 from pams.equity.domain.dcf import (
     DcfAssumptions,
     DcfResult,
@@ -57,6 +58,8 @@ from pams.equity.domain.trigger import (
 __all__ = [
     "AnnualFinancials",
     "AnnualFinancialsResult",
+    "BuyGateCondition",
+    "BuyGateResult",
     "CategoryScore",
     "CompanyScoreInputs",
     "CompanyScoreReport",
@@ -89,6 +92,7 @@ __all__ = [
     "calculate_dcf",
     "compute_growth_metrics",
     "dcf_sensitivity",
+    "evaluate_buy_gate",
     "project_fcf",
     "score_company",
     "score_competitiveness",

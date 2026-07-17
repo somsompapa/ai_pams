@@ -124,3 +124,33 @@ class TestLatestRatios:
         metrics = compute_growth_metrics(())
         assert metrics.roa_latest is None
         assert metrics.gross_margin_latest is None
+        assert metrics.roe_latest is None
+
+    def test_roe_latest_uses_controlling_interest_equity_not_total_equity(self) -> None:
+        """ROE 분모 버그 회귀 테스트: 신한지주 실측 — total_equity(60.37조)를 분모로
+        쓰면 ROE가 8.42%로 왜곡되지만, controlling_interest_equity(38.45조)를 쓰면
+        13.22%가 나와야 한다(밴드 하나 이상 차이)."""
+        annual = (
+            _row(
+                2025,
+                net_income=Decimal("5084519000000"),
+                total_equity=Decimal("60372324000000"),
+                controlling_interest_equity=Decimal("38450000000000"),
+            ),
+        )
+        metrics = compute_growth_metrics(annual)
+        assert metrics.roe_latest is not None
+        assert abs(metrics.roe_latest - Decimal("0.1322")) < Decimal("0.0001")
+
+    def test_roe_latest_none_when_controlling_interest_equity_missing(self) -> None:
+        """controlling_interest_equity가 없으면 total_equity로 대체하지 않고 None —
+        임의 추정 금지 원칙."""
+        annual = (
+            _row(
+                2025,
+                net_income=Decimal("5084519000000"),
+                total_equity=Decimal("60372324000000"),
+            ),
+        )
+        metrics = compute_growth_metrics(annual)
+        assert metrics.roe_latest is None

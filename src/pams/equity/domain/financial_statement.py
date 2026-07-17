@@ -35,6 +35,12 @@ class AnnualFinancials:
     total_assets: Decimal | None = None
     total_equity: Decimal | None = None
     total_equity_derived: bool = False  # True면 자산-부채 역산으로 채운 값(원본 계정 매칭 실패)
+    # 지배기업 소유주에게 귀속되는 지분(비지배지분 제외). total_equity(총자본)와 다르다 —
+    # ROE 분모는 반드시 이 필드를 써야 한다. DART 신한지주(055550) 실측: total_equity
+    # 약 60.37조원 vs controlling_interest_equity 약 38.45조원(비지배지분·신종자본증권
+    # 포함분 차이). total_equity를 ROE 분모로 쓰면 ROE가 실제보다 낮게 계산되는
+    # 왜곡이 발생한다 — 절대 total_equity로 대체하지 않는다.
+    controlling_interest_equity: Decimal | None = None
     # v1.4 정의 고정(company_analysis_rules.md 3-3): 총부채(유동+비유동 전체,
     # 총자산-자기자본). 이자부채만이 아니다 — debt_ratio 채점에 사용.
     total_debt: Decimal | None = None
@@ -53,6 +59,7 @@ class AnnualFinancials:
             ("gross_profit", self.gross_profit),
             ("total_assets", self.total_assets),
             ("total_equity", self.total_equity),
+            ("controlling_interest_equity", self.controlling_interest_equity),
             ("total_debt", self.total_debt),
             ("interest_bearing_debt", self.interest_bearing_debt),
             ("cash", self.cash),

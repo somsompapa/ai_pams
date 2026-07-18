@@ -58,6 +58,7 @@ from pams.equity.domain import (
     StockTarget,
     ValuationError,
     band_trigger,
+    compute_price_band,
     evaluate_buy_gate,
     evaluate_sell_review,
 )
@@ -87,7 +88,12 @@ from pams.interfaces.api.service import DashboardService
 from pams.journal.application import ListJournalEntries, RecordJournalEntry
 from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
-from pams.market_data.domain import MarketDataProviderError, QuoteProvider
+from pams.market_data.domain import (
+    HistoricalQuoteProvider,
+    MarketDataProviderError,
+    Quote,
+    QuoteProvider,
+)
 from pams.market_data.infrastructure import (
     CsvPriceLookup,
     YahooQuoteProvider,
@@ -1334,6 +1340,21 @@ def create_app(
             errors.append(f"{symbol}: 조회 결과 없음")
         return None, f"현재가 자동조회 실패({'; '.join(errors)})"
 
+    def _fetch_historical_quotes(asset_id: str, market: str) -> tuple[Quote, ...]:
+        """PER/PBR 5년밴드 전용 과거 가격 조회. price_provider가 historical_quotes를
+        지원하지 않으면(선택 기능) 조용히 빈 튜플 — 예외를 던지지 않는다."""
+        if not isinstance(price_provider, HistoricalQuoteProvider):
+            return ()
+        candidates = (asset_id,) if market == "US" else (f"{asset_id}.KS", f"{asset_id}.KQ")
+        for symbol in candidates:
+            try:
+                points = price_provider.historical_quotes(symbol, years=5)
+            except MarketDataProviderError:
+                continue
+            if points:
+                return points
+        return ()
+
     @app.post("/api/equity-score")
     def compute_equity_score(request: EquityScoreRequest) -> dict[str, Any]:
         """종목 100점 스코어링 + DCF (company_analysis_rules.md 3장, equity.domain).
@@ -1342,9 +1363,11 @@ def create_app(
         — 계산 불가한 항목을 서버가 지어내지 않는다(임의 추정 금지).
         """
         provider = _equity_financial_provider(request.market)
+        # PER/PBR 5년밴드 백분위 자동산출을 위해 최소 5개년은 확보한다(요청이 더
+        # 많이 지정했으면 그대로 존중).
         try:
             growth_report = LoadGrowthMetrics(provider=provider).execute(
-                request.asset_id, years=request.years
+                request.asset_id, years=max(request.years, 5)
             )
         except FinancialStatementProviderError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
@@ -1503,8 +1526,7 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(error)) from error
 
         # PEG(=PER÷EPS성장률%)는 현재가·최근연도 EPS·EPS 3Y CAGR이 이미 조회·계산돼
-        # 있으면 새 데이터 없이도 산출 가능하다(항등식 기반 — 임의추정 아님). PER/PBR
-        # 5년밴드 백분위는 5년치 가격이력이 별도로 필요해 여기서는 자동화하지 않는다.
+        # 있으면 새 데이터 없이도 산출 가능하다(항등식 기반 — 임의추정 아님).
         peg = _optional_decimal("peg", request.peg)
         if peg is None:
             latest_eps = annual[-1].eps if annual else None
@@ -1523,24 +1545,37 @@ def create_app(
                     "또는 0 이하) — 직접 입력하면 반영된다"
                 )
 
+        # PER/PBR 5년밴드 백분위는 과거 결산연도별 종가(Yahoo Finance 월단위 이력)와
+        # 이미 조회된 재무제표(EPS·자기자본·발행주식수)로 산출한다 — 종목 자신의
+        # 과거 밴드 내 현재 위치이지 업종 평균이 아니다(company_analysis_rules.md 3-4).
+        per_band_percentile = _optional_decimal("per_band_percentile", request.per_band_percentile)
+        pbr_band_percentile = _optional_decimal("pbr_band_percentile", request.pbr_band_percentile)
+        if per_band_percentile is None or pbr_band_percentile is None:
+            historical_prices = _fetch_historical_quotes(request.asset_id, request.market)
+            price_band = compute_price_band(
+                current_price=current_price, annual=annual, historical_prices=historical_prices
+            )
+            if per_band_percentile is None:
+                per_band_percentile = price_band.per_band_percentile
+            if pbr_band_percentile is None:
+                pbr_band_percentile = price_band.pbr_band_percentile
+            if price_band.per_band_percentile is None and price_band.pbr_band_percentile is None:
+                market_data_fetch_errors.append(
+                    f"PER/PBR 5년밴드 백분위 자동계산 실패: {price_band.note}"
+                )
+
         relative_valuation = CalculateRelativeValuation(
             config=scoring_config.relative_valuation
         ).execute(
-            per_band_percentile=_optional_decimal(
-                "per_band_percentile", request.per_band_percentile
-            ),
-            pbr_band_percentile=_optional_decimal(
-                "pbr_band_percentile", request.pbr_band_percentile
-            ),
+            per_band_percentile=per_band_percentile,
+            pbr_band_percentile=pbr_band_percentile,
             peg=peg,
         )
-        # 세 입력이 전부 미제공(자동산출된 peg도 없음)이면 "0점짜리 상대지표"가 아니라
+        # 세 입력이 전부 미제공(자동산출분 포함)이면 "0점짜리 상대지표"가 아니라
         # DCF와 동일하게 미산출로 처리한다(데이터 누락을 숨기지 않는다).
         relative_valuation_input_score = (
             None
-            if request.per_band_percentile is None
-            and request.pbr_band_percentile is None
-            and peg is None
+            if per_band_percentile is None and pbr_band_percentile is None and peg is None
             else relative_valuation.score
         )
 
@@ -1683,9 +1718,11 @@ def create_app(
                 "peg_adjustment": str(relative_valuation.peg_adjustment),
                 "missing": list(relative_valuation.missing),
                 "note": relative_valuation.note,
-                # peg가 자동산출된 경우 입력창에 그대로 채워 보여준다(net_debt_used와
-                # 동일한 투명성 원칙).
+                # peg·PER/PBR밴드가 자동산출된 경우 입력창에 그대로 채워 보여준다
+                # (net_debt_used와 동일한 투명성 원칙).
                 "peg_used": str(peg.quantize(Decimal("0.01"))) if peg is not None else None,
+                "per_band_percentile_used": _ratio_str(per_band_percentile),
+                "pbr_band_percentile_used": _ratio_str(pbr_band_percentile),
             },
             # 업종평균 대비 지표가 피어 비교로 자동산출된 경우 입력창에 채워 보여준다
             # (net_debt_used·peg_used와 동일한 투명성 원칙).

@@ -67,6 +67,20 @@ class _FailingQuoteProvider:
         raise MarketDataProviderError(f"{symbol}: 요청 실패")
 
 
+@dataclass(frozen=True, slots=True)
+class _FakeQuoteProviderWithHistory:
+    """PER/PBR 5년밴드 자동계산 테스트 전용 — historical_quotes까지 지원한다."""
+
+    quotes: dict[str, Quote]
+    history: dict[str, tuple[Quote, ...]]
+
+    def latest_quote(self, symbol: str) -> Quote | None:
+        return self.quotes.get(symbol)
+
+    def historical_quotes(self, symbol: str, *, years: int = 5) -> tuple[Quote, ...]:
+        return self.history.get(symbol, ())
+
+
 def _client(
     tmp_path: Path,
     provider: _FakeProvider,
@@ -377,7 +391,10 @@ class TestEquityScoreApi:
         body = response.json()
 
         assert body["market_data"]["current_price"] == "50.00"
-        assert body["market_data"]["fetch_errors"] == []
+        # _FakeQuoteProvider는 historical_quotes를 지원하지 않으므로(선택 기능)
+        # PER/PBR 밴드 자동계산 실패 안내는 별개로 남는다 — current_price 자체는
+        # 정상 자동조회됐다는 것만 확인한다.
+        assert not any("현재가" in e for e in body["market_data"]["fetch_errors"])
         assert body["dcf"]["gap"] is not None
 
     def test_current_price_fetch_failure_recorded_but_does_not_crash(self, tmp_path: Path) -> None:
@@ -837,3 +854,107 @@ class TestIndustryPeerComparisonAutoFill:
         comp = next(c for c in body["score"]["categories"] if c["category"] == "경쟁력")
         item = next(i for i in comp["items"] if "매출총이익률" in i["metric"])
         assert item["value"] == "0.9900"
+
+
+class TestPriceBandAutoFill:
+    """PER/PBR 5년밴드 백분위(company_analysis_rules.md 3-4)는 과거 결산연도별
+    종가(Yahoo Finance 월단위 이력)와 이미 조회된 재무제표로 자동 산출돼야 한다."""
+
+    _ANNUAL = (
+        AnnualFinancials(
+            fiscal_year=2021,
+            eps=Decimal(5),
+            total_equity=Decimal(1000),
+            shares_outstanding=Decimal(100),
+        ),
+        AnnualFinancials(
+            fiscal_year=2022,
+            eps=Decimal(6),
+            total_equity=Decimal(1100),
+            shares_outstanding=Decimal(100),
+        ),
+        AnnualFinancials(
+            fiscal_year=2023,
+            eps=Decimal(7),
+            total_equity=Decimal(1200),
+            shares_outstanding=Decimal(100),
+        ),
+        AnnualFinancials(
+            fiscal_year=2024,
+            eps=Decimal(8),
+            total_equity=Decimal(1300),
+            shares_outstanding=Decimal(100),
+        ),
+        AnnualFinancials(
+            fiscal_year=2025,
+            eps=Decimal(10),
+            total_equity=Decimal(1500),
+            shares_outstanding=Decimal(100),
+        ),
+    )
+    _HISTORY = (
+        Quote(
+            symbol="TEST", quote_date=date(2021, 12, 30), close=Decimal("50"), currency=Currency.USD
+        ),
+        Quote(
+            symbol="TEST", quote_date=date(2022, 12, 30), close=Decimal("60"), currency=Currency.USD
+        ),
+        Quote(
+            symbol="TEST", quote_date=date(2023, 12, 29), close=Decimal("70"), currency=Currency.USD
+        ),
+        Quote(
+            symbol="TEST", quote_date=date(2024, 12, 31), close=Decimal("80"), currency=Currency.USD
+        ),
+    )
+
+    def _make_client(self, tmp_path: Path) -> TestClient:
+        provider = _FakeProvider(
+            AnnualFinancialsResult(asset_id="TEST", data_source="fake", annual=self._ANNUAL)
+        )
+        price_provider = _FakeQuoteProviderWithHistory(quotes={}, history={"TEST": self._HISTORY})
+        return _client(tmp_path, provider, price_provider=price_provider)
+
+    def test_per_and_pbr_band_auto_computed_when_omitted(self, tmp_path: Path) -> None:
+        client = self._make_client(tmp_path)
+        payload = {
+            **_BASE_PAYLOAD,
+            "current_price": "300",
+            "per_band_percentile": None,
+            "pbr_band_percentile": None,
+        }
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+
+        # 역대 PER(10,10,10,10) 대비 현재 PER(300/10=30)이 최고 → 백분위 1.0
+        assert body["relative_valuation"]["per_band_percentile_used"] == "1.0000"
+        assert body["relative_valuation"]["pbr_band_percentile_used"] == "1.0000"
+
+    def test_explicit_value_not_overridden_by_auto_band(self, tmp_path: Path) -> None:
+        client = self._make_client(tmp_path)
+        payload = {
+            **_BASE_PAYLOAD,
+            "current_price": "300",
+            "per_band_percentile": "0.42",
+        }
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["relative_valuation"]["per_band_percentile_used"] == "0.4200"
+
+    def test_no_historical_prices_leaves_band_missing_with_note(self, tmp_path: Path) -> None:
+        provider = _FakeProvider(
+            AnnualFinancialsResult(asset_id="TEST", data_source="fake", annual=self._ANNUAL)
+        )
+        client = _client(tmp_path, provider)  # 기본 _FailingQuoteProvider: 히스토리 미지원
+        payload = {
+            **_BASE_PAYLOAD,
+            "current_price": "300",
+            "per_band_percentile": None,
+            "pbr_band_percentile": None,
+        }
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["relative_valuation"]["per_band_percentile_used"] is None
+        assert any("PER/PBR" in e for e in body["market_data"]["fetch_errors"])

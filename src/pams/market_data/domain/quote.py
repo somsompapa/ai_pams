@@ -43,6 +43,15 @@ class QuoteProvider(Protocol):
         ...
 
 
+@runtime_checkable
+class HistoricalQuoteProvider(Protocol):
+    def historical_quotes(self, symbol: str, *, years: int = 5) -> tuple[Quote, ...]:
+        """symbol의 과거 종가 시계열(오래된→최신), 월 단위 근사. 조회 실패·데이터
+        없음이면 빈 튜플(예외 아님) — PER/PBR 밴드 계산이 부분 데이터로도 시도될 수
+        있게 한다. 선택 기능이므로 모든 QuoteProvider 구현체가 지원할 필요는 없다."""
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class SymbolMap:
     """asset_id/통화쌍/지표 → 외부 심볼 매핑. config/market/symbols.yaml에서 로드."""

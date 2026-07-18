@@ -210,3 +210,101 @@ class TestDartFinancialStatementProvider:
         provider.annual_financials("055550", years=1)
         assert calls["corp_code"] == 1
         assert cache_path.exists()
+
+
+class TestSharesOutstanding:
+    """종목 심볼만 입력해도 DCF 주당 적정가가 나오도록, 재무제표와 별도 API
+    (stockTotqySttus)로 발행주식수를 조회한다."""
+
+    def make(self, handler, tmp_path) -> DartFinancialStatementProvider:  # type: ignore[no-untyped-def]
+        return DartFinancialStatementProvider(
+            api_key="test-key",
+            corp_code_cache_path=tmp_path / "corp_code_cache.xml",
+            transport=httpx.MockTransport(handler),
+        )
+
+    def test_distributed_shares_preferred_from_total_row(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "corpCode" in url:
+                return httpx.Response(200, content=_corp_code_zip_bytes())
+            if "stockTotqySttus" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "000",
+                        "list": [
+                            {
+                                "se": "보통주",
+                                "istc_totqy": "100,000,000",
+                                "distb_stock_co": "99,000,000",
+                            },
+                            {
+                                "se": "우선주",
+                                "istc_totqy": "1,000,000",
+                                "distb_stock_co": "900,000",
+                            },
+                            {
+                                "se": "합계",
+                                "istc_totqy": "101,000,000",
+                                "distb_stock_co": "99,900,000",
+                            },
+                        ],
+                    },
+                )
+            year = request.url.params.get("bsns_year")
+            if year != "2025":
+                return httpx.Response(200, json={"status": "013", "message": "no data"})
+            return httpx.Response(
+                200, json={"status": "000", "list": [_dart_item("매출액", "1,000")]}
+            )
+
+        provider = self.make(handler, tmp_path)
+        result = provider.annual_financials("352820", years=1)
+        assert result.annual[0].shares_outstanding == Decimal("99900000")
+
+    def test_falls_back_to_issued_shares_when_distributed_missing(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "corpCode" in url:
+                return httpx.Response(200, content=_corp_code_zip_bytes())
+            if "stockTotqySttus" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "000",
+                        "list": [{"se": "합계", "istc_totqy": "101,000,000"}],
+                    },
+                )
+            year = request.url.params.get("bsns_year")
+            if year != "2025":
+                return httpx.Response(200, json={"status": "013", "message": "no data"})
+            return httpx.Response(
+                200, json={"status": "000", "list": [_dart_item("매출액", "1,000")]}
+            )
+
+        provider = self.make(handler, tmp_path)
+        result = provider.annual_financials("352820", years=1)
+        assert result.annual[0].shares_outstanding == Decimal("101000000")
+
+    def test_fetch_failure_leaves_shares_outstanding_none_not_fatal(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """발행주식수 조회가 실패해도 나머지 재무제표는 정상 반환돼야 한다(부분 실패
+        허용) — DCF는 여전히 기업가치까지는 계산 가능해야 하므로 전체를 실패시키지 않는다."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "corpCode" in url:
+                return httpx.Response(200, content=_corp_code_zip_bytes())
+            if "stockTotqySttus" in url:
+                return httpx.Response(500, json={"status": "500", "message": "error"})
+            year = request.url.params.get("bsns_year")
+            if year != "2025":
+                return httpx.Response(200, json={"status": "013", "message": "no data"})
+            return httpx.Response(
+                200, json={"status": "000", "list": [_dart_item("매출액", "1,000")]}
+            )
+
+        provider = self.make(handler, tmp_path)
+        result = provider.annual_financials("352820", years=1)
+        assert result.annual[0].revenue == Decimal("1000")
+        assert result.annual[0].shares_outstanding is None

@@ -37,6 +37,17 @@ from pams.equity.domain.financial_statement import (
 
 _CORP_CODE_URL = "https://opendart.fss.or.kr/api/corpCode.xml"
 _FINANCIALS_URL = "https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json"
+_STOCK_TOTQY_URL = "https://opendart.fss.or.kr/api/stockTotqySttus.json"
+
+# ⚠️ "주식의총수현황"(stockTotqySttus) 응답 필드명은 DART 공식 API 문서 기준 최선 추정이며
+# 실제 응답으로 검증되지 않았다(재무제표 계정명 매칭과 달리 이 엔드포인트는 이 프로젝트에서
+# 아직 실측 데이터로 확인된 적이 없다 — v1.5의 KRX 외국인수급 API와 같은 종류의 미검증 상태).
+# 후보 키를 여러 개 두어 방어적으로 파싱하되(계정명 매칭과 같은 패턴), 전부 실패하면 조용히
+# None을 반환한다(임의 추정 없이 "자동조회 실패" 그대로 두는 편이 잘못된 값을 채우는 것보다
+# 안전하다). 실제 응답으로 검증되면 후보 목록을 정리할 것.
+_DISTRIBUTED_SHARES_KEYS = ("distb_stock_co", "distb_stock_qy")
+_ISSUED_SHARES_KEYS = ("istc_totqy", "isu_stock_totqy")
+_SHARE_CLASS_TOTAL_LABELS = ("합계", "계")
 
 _ACCOUNT_MAP: dict[str, tuple[str, ...]] = {
     # ⚠️ 은행/보험/증권/지주는 K-IFRS상 "매출액"·"매출총이익" 개념 자체가 없다(이자수익·
@@ -149,6 +160,41 @@ class DartFinancialStatementProvider:
         data: dict[str, Any] = response.json()
         return data
 
+    def _fetch_shares_outstanding(self, corp_code: str, year: int) -> Decimal | None:
+        """발행주식수(유통주식수 우선, 없으면 발행주식총수) 조회. 실패하면 조용히 None —
+        이 값이 없어도 재무제표 나머지는 정상 반환돼야 하므로 예외를 던지지 않는다."""
+        try:
+            with self._client() as client:
+                response = client.get(
+                    _STOCK_TOTQY_URL,
+                    params={
+                        "crtfc_key": self.api_key,
+                        "corp_code": corp_code,
+                        "bsns_year": str(year),
+                        "reprt_code": "11011",
+                    },
+                )
+            data: dict[str, Any] = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        if data.get("status") != "000":
+            return None
+
+        rows = data.get("list", [])
+        total_row = next(
+            (row for row in rows if _normalize(row.get("se", "")) in _SHARE_CLASS_TOTAL_LABELS),
+            None,
+        )
+        candidate_rows = [total_row] if total_row is not None else rows
+        for row in candidate_rows:
+            if row is None:
+                continue
+            for key in _DISTRIBUTED_SHARES_KEYS + _ISSUED_SHARES_KEYS:
+                value = _to_decimal(row.get(key))
+                if value is not None and value > 0:
+                    return value
+        return None
+
     def annual_financials(self, asset_id: str, *, years: int = 4) -> AnnualFinancialsResult:
         if not self.api_key.strip():
             raise FinancialStatementProviderError(
@@ -205,6 +251,8 @@ class DartFinancialStatementProvider:
                 total_equity = values["total_assets"] - values["total_liabilities"]
                 total_equity_derived = True
 
+            shares_outstanding = self._fetch_shares_outstanding(corp_code, year)
+
             rows.append(
                 AnnualFinancials(
                     fiscal_year=year,
@@ -222,6 +270,7 @@ class DartFinancialStatementProvider:
                     cash=values["cash"],
                     operating_cash_flow=values["operating_cash_flow"],
                     capex=values["capex"],
+                    shares_outstanding=shares_outstanding,
                 )
             )
         return AnnualFinancialsResult(

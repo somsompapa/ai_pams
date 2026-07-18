@@ -62,6 +62,13 @@ from pams.equity.domain.scoring_engine import (
     score_valuation,
 )
 from pams.equity.domain.sell_review import SellReviewResult, SellSignal, evaluate_sell_review
+from pams.equity.domain.tranche_plan import (
+    ScoreItemSnapshot,
+    ScoreSnapshot,
+    TrancheEvaluation,
+    TranchePlan,
+    evaluate_tranche,
+)
 from pams.equity.domain.trigger import (
     EvaluatePriceTriggers,
     PriceTrigger,
@@ -103,6 +110,8 @@ __all__ = [
     "RiskConfig",
     "RiskDeduction",
     "ScoreItem",
+    "ScoreItemSnapshot",
+    "ScoreSnapshot",
     "ScoringConfig",
     "SellReviewResult",
     "SellSignal",
@@ -111,6 +120,8 @@ __all__ = [
     "StockSignal",
     "StockTarget",
     "StockTargetPlan",
+    "TrancheEvaluation",
+    "TranchePlan",
     "TriggerZones",
     "ValuationError",
     "ValuationGap",
@@ -124,6 +135,7 @@ __all__ = [
     "evaluate_buy_gate",
     "evaluate_liquidity",
     "evaluate_sell_review",
+    "evaluate_tranche",
     "project_fcf",
     "relative_valuation_score",
     "score_company",

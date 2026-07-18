@@ -669,6 +669,23 @@
       <button type="submit">유동성 확인</button>
     </form>
     <div id="liq-output" class="empty">아직 확인 결과가 없다.</div>
+
+    <h3 style="margin-top:1.5rem">분할매수 추적 (buy_rules.md B-2 — 30/30/40%)</h3>
+    <p class="empty" style="margin-top:0">
+      1차 매수를 실제로 실행한 뒤 등록한다. baseline 점수는 "종목분석" 탭에서 방금
+      조회한 결과를 그대로 쓴다 — 등록·판정 전에 해당 종목으로 종목분석을 먼저
+      실행해야 한다. 2차(-10%)·3차(-20%) 하락 시 점수가 10점 이상 떨어졌으면
+      추가매수를 멈추라고 안내하되, 하락이 전부 데이터 누락 때문이면(v1.6.1) 중단
+      대신 재점검을 권한다. 실제 매수는 여기서 실행되지 않는다 — 상태 기록용이다.
+    </p>
+    <form id="tranche-create-form" class="tx-form">
+      <input id="tranche-asset-id" placeholder="종목 심볼 (종목분석에서 방금 조회한 것과 동일해야 함)">
+      <input id="tranche-first-price" placeholder="1차 매수가">
+      <input id="tranche-target-qty" placeholder="목표 수량(전체)">
+      <button type="submit">계획 등록 (1차 매수 완료로 기록)</button>
+    </form>
+    <p id="tranche-create-msg" class="hint"></p>
+    <div id="tranche-list"></div>
   </section>
 
   <section class="card wide" data-tab="market-regime">
@@ -1603,6 +1620,7 @@ el("audit-load-more").addEventListener("click", () => {
   await loadTransactions();
   loadAssets();
   loadJournal();
+  loadTranchePlans();
   await loadAudit();
 })();
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
@@ -1623,7 +1641,10 @@ const VERDICT_LABELS = {
   exclude: "제외 (70점 미만)",
 };
 
+let lastEquityScoreBody = null;
+
 function renderEquityScore(body) {
+  lastEquityScoreBody = body;
   const score = body.score;
   const rows = score.categories.flatMap((c) =>
     c.items.map((i) => [c.category, i.metric, i.value ?? "—", i.bucket, i.score + "/" + i.max_score, i.note || ""])
@@ -1889,6 +1910,7 @@ guardSubmit(el("bg-quickfill-form"), async () => {
     return;
   }
   const body = await response.json();
+  lastEquityScoreBody = body;
   applyEquityScoreToGates(body);
   msg.className = "hint";
   msg.textContent =
@@ -1976,6 +1998,118 @@ guardSubmit(el("liq-form"), async () => {
     el("liq-output").textContent = body.detail ?? ("실패 (" + response.status + ")");
   }
 });
+
+guardSubmit(el("tranche-create-form"), async () => {
+  const msg = el("tranche-create-msg");
+  const assetId = el("tranche-asset-id").value.trim();
+  if (!assetId) {
+    msg.className = "";
+    msg.textContent = "종목 심볼을 입력하라.";
+    return;
+  }
+  if (!lastEquityScoreBody || lastEquityScoreBody.score.symbol !== assetId) {
+    msg.className = "";
+    msg.textContent = "먼저 \"종목분석\" 탭에서 " + assetId + "을(를) 조회해야 baseline 점수를 쓸 수 있다.";
+    return;
+  }
+  const payload = {
+    asset_id: assetId,
+    first_tranche_price: el("tranche-first-price").value.trim(),
+    target_quantity: el("tranche-target-qty").value.trim(),
+    baseline_score: lastEquityScoreBody.score,
+  };
+  const response = await fetch("/api/tranche-plans", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (response.ok) {
+    msg.className = "hint";
+    msg.textContent = "등록 완료: " + assetId + " (baseline " + body.baseline_total_score + "점)";
+    toast(assetId + " 분할매수 계획 등록", "success");
+    el("tranche-create-form").reset();
+    loadTranchePlans();
+  } else {
+    msg.className = "";
+    msg.textContent = body.detail ?? ("실패 (" + response.status + ")");
+    toast("분할매수 계획 등록 실패", "error");
+  }
+});
+
+async function loadTranchePlans() {
+  const response = await fetch("/api/tranche-plans");
+  if (!response.ok) return;
+  const plans = await response.json();
+  el("tranche-list").innerHTML = plans.length
+    ? "<table><thead><tr><th>종목</th><th>1차가</th><th>목표수량</th><th>진행</th><th>baseline점수</th><th></th></tr></thead><tbody>" +
+      plans.map((p) =>
+        "<tr><td>" + esc(p.asset_id) + "</td><td>" + esc(p.first_tranche_price) + "</td>" +
+        "<td>" + esc(p.target_quantity) + "</td><td>" + esc(p.tranches_bought) + "/3</td>" +
+        "<td>" + esc(p.baseline_total_score) + "</td><td>" +
+        "<button type=\"button\" class=\"tranche-eval\" data-id=\"" + esc(p.asset_id) + "\">판정</button> " +
+        "<button type=\"button\" class=\"tranche-advance\" data-id=\"" + esc(p.asset_id) + "\">실행기록</button> " +
+        "<button type=\"button\" class=\"tranche-delete\" data-id=\"" + esc(p.asset_id) + "\">삭제</button></td></tr>"
+      ).join("") + "</tbody></table>"
+    : "<p class=\"empty\">등록된 분할매수 계획이 없다.</p>";
+
+  el("tranche-list").querySelectorAll(".tranche-delete").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      await fetch("/api/tranche-plans/" + encodeURIComponent(btn.dataset.id), { method: "DELETE" });
+      toast(btn.dataset.id + " 계획 삭제", "success");
+      loadTranchePlans();
+    })
+  );
+  el("tranche-list").querySelectorAll(".tranche-advance").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const response = await fetch(
+        "/api/tranche-plans/" + encodeURIComponent(btn.dataset.id) + "/advance",
+        { method: "POST" }
+      );
+      const body = await response.json().catch(() => ({}));
+      if (response.ok) {
+        toast(btn.dataset.id + " " + body.tranches_bought + "차 매수 실행 기록", "success");
+        loadTranchePlans();
+      } else {
+        toast(body.detail ?? "실행 기록 실패", "error");
+      }
+    })
+  );
+  el("tranche-list").querySelectorAll(".tranche-eval").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      const assetId = btn.dataset.id;
+      if (!lastEquityScoreBody || lastEquityScoreBody.score.symbol !== assetId) {
+        toast("먼저 \"종목분석\" 탭에서 " + assetId + "을(를) 다시 조회하라(최신 점수 필요)", "error");
+        return;
+      }
+      const suggestedPrice = (lastEquityScoreBody.market_data && lastEquityScoreBody.market_data.current_price) || "";
+      const currentPrice = window.prompt(assetId + " 현재가를 입력하라", suggestedPrice);
+      if (!currentPrice) return;
+      const response = await fetch("/api/tranche-plans/" + encodeURIComponent(assetId) + "/evaluate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ current_price: currentPrice, current_score: lastEquityScoreBody.score }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        toast(body.detail ?? "판정 실패", "error");
+        return;
+      }
+      let label;
+      if (!body.price_trigger_met) {
+        label = (body.next_tranche ?? "다음") + "차 가격 트리거 미도달(1차 대비 " + body.price_drop_pct + ")";
+      } else if (body.logic_broken) {
+        label = "⚠️ 논리훼손 — 추가매수 중단 권고";
+      } else if (body.data_gap_only) {
+        label = "⚠️ 데이터 누락으로 점수 하락 — 재점검 후 판단";
+      } else {
+        label = "✅ " + body.next_tranche + "차 매수 조건 충족(목표수량의 " +
+          (Number(body.recommended_amount_fraction) * 100).toFixed(0) + "%)";
+      }
+      window.alert(assetId + ": " + label + "\n\n" + body.note);
+    })
+  );
+}
 
 function renderSellReview(body) {
   const rows = [...body.thesis_break_signals, body.overvaluation_signal].map((s) =>

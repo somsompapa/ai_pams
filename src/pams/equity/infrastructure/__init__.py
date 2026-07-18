@@ -2,6 +2,7 @@
 
 from pams.equity.infrastructure.dart_provider import DartFinancialStatementProvider
 from pams.equity.infrastructure.json_industry_map import JsonIndustryClassificationRepository
+from pams.equity.infrastructure.json_tranche_plan_repository import JsonTranchePlanRepository
 from pams.equity.infrastructure.sec_edgar_provider import SecEdgarFinancialStatementProvider
 from pams.equity.infrastructure.yaml_scoring_config import (
     ScoringConfigError,
@@ -23,6 +24,7 @@ from pams.equity.infrastructure.yaml_triggers import (
 __all__ = [
     "DartFinancialStatementProvider",
     "JsonIndustryClassificationRepository",
+    "JsonTranchePlanRepository",
     "PriceTriggerConfigError",
     "ScoringConfigError",
     "SecEdgarFinancialStatementProvider",

@@ -55,13 +55,17 @@ from pams.equity.domain import (
     DcfAssumptions,
     PriceTrigger,
     RiskDeduction,
+    ScoreItemSnapshot,
+    ScoreSnapshot,
     StockTarget,
+    TranchePlan,
     ValuationError,
     band_trigger,
     compute_price_band,
     evaluate_buy_gate,
     evaluate_liquidity,
     evaluate_sell_review,
+    evaluate_tranche,
 )
 from pams.equity.domain.financial_statement import (
     AnnualFinancials,
@@ -73,6 +77,7 @@ from pams.equity.domain.score import CategoryScore, CompanyScoreReport, ScoreIte
 from pams.equity.infrastructure import (
     DartFinancialStatementProvider,
     JsonIndustryClassificationRepository,
+    JsonTranchePlanRepository,
     PriceTriggerConfigError,
     ScoringConfigError,
     SecEdgarFinancialStatementProvider,
@@ -253,6 +258,46 @@ class LiquidityCheckRequest(BaseModel):
     asset_id: str
     market: Literal["US", "KR"]
     planned_first_tranche_amount: str
+
+
+class ScoreItemInput(BaseModel):
+    """/api/equity-score 응답의 score.categories[].items[] 원소를 그대로 받는다."""
+
+    metric: str
+    value: str
+    score: str
+
+
+class ScoreCategoryInput(BaseModel):
+    items: list[ScoreItemInput] = []
+
+
+class ScoreInput(BaseModel):
+    """/api/equity-score 응답의 score 객체를 그대로 넘긴다(client가 조립 —
+    buy-gate·sell-review와 동일한 원칙: 서로 다른 컨텍스트를 서버가 자동으로
+    묶지 않는다)."""
+
+    total_score: str
+    categories: list[ScoreCategoryInput] = []
+
+
+class CreateTranchePlanRequest(BaseModel):
+    """분할매수 계획 등록(buy_rules.md B-2 1차 매수 시). 1차 매수를 실제로
+    실행한 뒤, 그 시점의 매수가·목표수량·기업 점수 상세를 baseline으로 남긴다.
+    """
+
+    asset_id: str
+    first_tranche_price: str
+    target_quantity: str
+    baseline_score: ScoreInput
+
+
+class EvaluateTrancheRequest(BaseModel):
+    """분할매수 2차/3차 시점 판정 요청 — 가격 트리거 충족 여부와 점수 하락이
+    데이터 누락 때문인지 실제 논리훼손인지(v1.6.1) 함께 판정한다."""
+
+    current_price: str
+    current_score: ScoreInput
 
 
 class SellReviewRequest(BaseModel):
@@ -557,6 +602,7 @@ def create_app(
     storage_dir = data_dir if data_dir is not None else _PROJECT_ROOT / "data"
     journal_repository = JsonlJournalRepository(storage_dir / "journal.jsonl")
     audit_recorder = RecordAuditEvent(trail=JsonlAuditTrail(storage_dir / "audit.jsonl"))
+    tranche_plan_repository = JsonTranchePlanRepository(storage_dir / "tranche_plans.json")
     injected_equity_providers = equity_providers or {}
     indicator_provider = market_indicator_provider or YahooMarketRegimeIndicatorProvider()
     price_provider = equity_price_provider or YahooQuoteProvider()
@@ -1340,6 +1386,23 @@ def create_app(
         그대로 노출하면 API 응답이 읽기 어렵다."""
         return str(value.quantize(Decimal("0.0001"))) if value is not None else None
 
+    def _score_snapshot_from_input(score: ScoreInput) -> ScoreSnapshot:
+        """/api/equity-score 응답의 score 객체를 분할매수 판정용 스냅샷으로 바꾼다.
+        '데이터 누락' 여부는 scoring_engine._missing()이 항상 value="—"로 표시하는
+        기존 관례를 그대로 재사용한다(별도 boolean 필드를 새로 만들지 않는다)."""
+        items = tuple(
+            ScoreItemSnapshot(
+                metric=item.metric,
+                score=_required_decimal(f"score item '{item.metric}'", item.score),
+                missing=item.value == "—",
+            )
+            for category in score.categories
+            for item in category.items
+        )
+        return ScoreSnapshot(
+            total_score=_required_decimal("total_score", score.total_score), items=items
+        )
+
     def _fetch_equity_price(asset_id: str, market: str) -> tuple[Decimal | None, str | None]:
         """현재가 자동조회. 실패해도 예외를 던지지 않는다 — (값, 실패사유) 튜플로
         돌려주고 값이 없으면 DCF 괴리율 계산만 생략한다(임의 대체 금지)."""
@@ -1902,6 +1965,116 @@ def create_app(
             ),
             "sufficient": result.sufficient,
             "days_observed": result.days_observed,
+            "note": result.note,
+        }
+
+    def _serialize_tranche_plan(plan: TranchePlan) -> dict[str, Any]:
+        return {
+            "asset_id": plan.asset_id,
+            "first_tranche_price": str(plan.first_tranche_price),
+            "target_quantity": str(plan.target_quantity),
+            "baseline_total_score": str(plan.baseline.total_score),
+            "tranches_bought": plan.tranches_bought,
+            "created_at": plan.created_at.isoformat(),
+        }
+
+    @app.post("/api/tranche-plans")
+    def create_tranche_plan(request: CreateTranchePlanRequest) -> dict[str, Any]:
+        """분할매수 계획 등록(buy_rules.md B-2 1차 매수 시). 1차 매수를 실제로
+        실행한 뒤 호출한다 — 이 엔드포인트가 매수를 대신 실행하지 않는다."""
+        price = _required_decimal("first_tranche_price", request.first_tranche_price)
+        quantity = _required_decimal("target_quantity", request.target_quantity)
+        baseline = _score_snapshot_from_input(request.baseline_score)
+        try:
+            plan = TranchePlan(
+                asset_id=request.asset_id,
+                first_tranche_price=price,
+                target_quantity=quantity,
+                baseline=baseline,
+                tranches_bought=1,
+                created_at=as_of(),
+            )
+        except DomainError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        tranche_plan_repository.save(plan)
+        record_audit(
+            actor="user",
+            action="tranche_plan.created",
+            detail=f"{request.asset_id} 분할매수 계획 등록 (1차 {price}에 매수)",
+            reason="웹 매수판정 요청",
+        )
+        return _serialize_tranche_plan(plan)
+
+    @app.get("/api/tranche-plans")
+    def list_tranche_plans() -> list[dict[str, Any]]:
+        return [_serialize_tranche_plan(p) for p in tranche_plan_repository.load_all().values()]
+
+    @app.delete("/api/tranche-plans/{asset_id}")
+    def delete_tranche_plan(asset_id: str) -> dict[str, Any]:
+        tranche_plan_repository.delete(asset_id)
+        record_audit(
+            actor="user",
+            action="tranche_plan.deleted",
+            detail=f"{asset_id} 분할매수 계획 삭제",
+            reason="웹 매수판정 요청",
+        )
+        return {"deleted": asset_id}
+
+    @app.post("/api/tranche-plans/{asset_id}/advance")
+    def advance_tranche_plan(asset_id: str) -> dict[str, Any]:
+        """다음 분할매수를 실제로 실행했음을 기록한다(자동 매수 아님 — 사용자가
+        직접 실행한 뒤 이 엔드포인트로 상태만 갱신)."""
+        plan = tranche_plan_repository.get(asset_id)
+        if plan is None:
+            raise HTTPException(status_code=404, detail=f"{asset_id}: 등록된 분할매수 계획 없음")
+        if plan.tranches_bought >= 3:
+            raise HTTPException(status_code=400, detail=f"{asset_id}: 이미 3차까지 완료됨")
+        updated = TranchePlan(
+            asset_id=plan.asset_id,
+            first_tranche_price=plan.first_tranche_price,
+            target_quantity=plan.target_quantity,
+            baseline=plan.baseline,
+            tranches_bought=plan.tranches_bought + 1,
+            created_at=plan.created_at,
+        )
+        tranche_plan_repository.save(updated)
+        record_audit(
+            actor="user",
+            action="tranche_plan.advanced",
+            detail=f"{asset_id} {updated.tranches_bought}차 매수 실행 기록",
+            reason="웹 매수판정 요청",
+        )
+        return _serialize_tranche_plan(updated)
+
+    @app.post("/api/tranche-plans/{asset_id}/evaluate")
+    def evaluate_tranche_plan(asset_id: str, request: EvaluateTrancheRequest) -> dict[str, Any]:
+        """buy_rules.md B-2 2차/3차 판정 — 가격 트리거·데이터누락/논리훼손
+        구분(v1.6.1)."""
+        plan = tranche_plan_repository.get(asset_id)
+        if plan is None:
+            raise HTTPException(status_code=404, detail=f"{asset_id}: 등록된 분할매수 계획 없음")
+        price = _required_decimal("current_price", request.current_price)
+        current = _score_snapshot_from_input(request.current_score)
+        result = evaluate_tranche(plan=plan, current_price=price, current=current)
+        record_audit(
+            actor="user",
+            action="tranche_plan.evaluated",
+            detail=f"{asset_id} {plan.tranches_bought + 1}차 판정: {result.note}",
+            reason="웹 매수판정 요청",
+        )
+        return {
+            "next_tranche": result.next_tranche,
+            "price_drop_pct": str(result.price_drop_pct.quantize(Decimal("0.0001"))),
+            "price_trigger_met": result.price_trigger_met,
+            "total_score_drop": str(result.total_score_drop),
+            "real_score_drop": str(result.real_score_drop),
+            "logic_broken": result.logic_broken,
+            "data_gap_only": result.data_gap_only,
+            "recommended_amount_fraction": (
+                str(result.recommended_amount_fraction)
+                if result.recommended_amount_fraction is not None
+                else None
+            ),
             "note": result.note,
         }
 

@@ -31,6 +31,7 @@ class GrowthMetrics:
     roe_latest: Decimal | None
     debt_ratio_latest: Decimal | None
     roic_latest: Decimal | None
+    operating_margin_latest: Decimal | None
 
 
 def _cagr_3y(
@@ -84,10 +85,13 @@ def compute_growth_metrics(annual: tuple[AnnualFinancials, ...]) -> GrowthMetric
     roe: Decimal | None = None
     debt_ratio: Decimal | None = None
     roic: Decimal | None = None
+    operating_margin: Decimal | None = None
     if sorted_annual:
         last = sorted_annual[-1]
         if last.revenue is not None and last.revenue > 0 and last.gross_profit is not None:
             gross_margin = last.gross_profit / last.revenue
+        if last.revenue is not None and last.revenue > 0 and last.operating_income is not None:
+            operating_margin = last.operating_income / last.revenue
         if last.total_assets is not None and last.total_assets > 0 and last.net_income is not None:
             roa = last.net_income / last.total_assets
         # ROE 분모는 반드시 controlling_interest_equity(지배주주지분)를 쓴다.
@@ -135,4 +139,5 @@ def compute_growth_metrics(annual: tuple[AnnualFinancials, ...]) -> GrowthMetric
         roe_latest=roe,
         debt_ratio_latest=debt_ratio,
         roic_latest=roic,
+        operating_margin_latest=operating_margin,
     )

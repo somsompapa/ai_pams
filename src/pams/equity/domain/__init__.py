@@ -28,6 +28,14 @@ from pams.equity.domain.financial_statement import (
     FinancialStatementProviderError,
 )
 from pams.equity.domain.growth_metrics import GrowthMetrics, compute_growth_metrics
+from pams.equity.domain.industry_classification import (
+    EquityMarketDataProvider,
+    IndustryClassification,
+    IndustryClassificationProvider,
+    IndustryClassificationRepository,
+    IndustryPeerComparison,
+    compare_industry_peers,
+)
 from pams.equity.domain.relative_valuation import (
     RelativeValuationConfig,
     RelativeValuationResult,
@@ -72,11 +80,16 @@ __all__ = [
     "DcfAssumptions",
     "DcfResult",
     "EntryBarrierConfig",
+    "EquityMarketDataProvider",
     "EvaluatePriceTriggers",
     "EvaluateStockAllocation",
     "FinancialStatementProvider",
     "FinancialStatementProviderError",
     "GrowthMetrics",
+    "IndustryClassification",
+    "IndustryClassificationProvider",
+    "IndustryClassificationRepository",
+    "IndustryPeerComparison",
     "PriceTrigger",
     "PriceTriggerPlan",
     "PriceTriggerReport",
@@ -100,6 +113,7 @@ __all__ = [
     "Verdict",
     "band_trigger",
     "calculate_dcf",
+    "compare_industry_peers",
     "compute_growth_metrics",
     "dcf_sensitivity",
     "evaluate_buy_gate",

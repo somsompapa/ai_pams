@@ -16,6 +16,9 @@
 from __future__ import annotations
 
 import csv
+import os
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -25,6 +28,15 @@ import yaml
 from pams.asset.infrastructure import YamlAssetCatalog
 from pams.dca.domain import DcaPlan
 from pams.dca.infrastructure import YamlDcaPlanLoader
+from pams.equity.domain.industry_classification import (
+    EquityMarketDataProvider,
+    IndustryClassification,
+)
+from pams.equity.infrastructure import (
+    DartFinancialStatementProvider,
+    JsonIndustryClassificationRepository,
+    SecEdgarFinancialStatementProvider,
+)
 from pams.interfaces.api.service import DashboardService
 from pams.ips.infrastructure import YamlPolicyRepository
 from pams.market_data.application import FetchMarketData, FetchResult
@@ -145,6 +157,75 @@ def load_dca_plan(project_root: Path) -> DcaPlan:
     if not path.exists():
         raise RealDataError(f"DCA 계획 파일이 없다: {path} - 예시: examples/dca.yaml")
     return YamlDcaPlanLoader(path).load()
+
+
+def equity_financial_provider(project_root: Path, market: str) -> EquityMarketDataProvider:
+    if market == "US":
+        contact = os.environ.get("SEC_EDGAR_CONTACT_EMAIL", "").strip()
+        return SecEdgarFinancialStatementProvider(contact_email=contact)
+    if market == "KR":
+        api_key = os.environ.get("DART_API_KEY", "").strip()
+        return DartFinancialStatementProvider(
+            api_key=api_key,
+            corp_code_cache_path=project_root / "data" / ".dart_corp_code_cache.xml",
+        )
+    raise RealDataError(f"알 수 없는 market: {market}")
+
+
+def _equity_universe(project_root: Path) -> list[tuple[str, str]]:
+    """config/assets/default.yaml에서 domestic_stock/us_stock만 골라 (market, symbol)
+    목록을 만든다 — ETF/채권/현금 등은 DART/SEC 재무제표 조회 대상이 아니다."""
+    path = project_root / "config" / "assets" / "default.yaml"
+    if not path.exists():
+        return []
+    document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    entries = document.get("assets", []) if isinstance(document, dict) else []
+    universe: list[tuple[str, str]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        asset_id = str(entry.get("asset_id", ""))
+        market = {"KR": "KR", "US": "US"}.get(str(entry.get("country", "")))
+        if entry.get("asset_class") not in ("domestic_stock", "us_stock"):
+            continue
+        if market is None or ":" not in asset_id:
+            continue
+        universe.append((market, asset_id.split(":", 1)[1]))
+    return universe
+
+
+@dataclass(frozen=True, slots=True)
+class IndustrySyncResult:
+    synced: dict[str, IndustryClassification]
+    errors: tuple[str, ...]
+
+
+def sync_industry_classifications(
+    project_root: Path,
+    provider_for_market: Callable[[str], EquityMarketDataProvider] | None = None,
+) -> IndustrySyncResult:
+    """config/assets/default.yaml에 등록된 국내/미국 주식의 업종분류(DART induty_code/
+    SEC SIC)를 조회해 data/industry_map.json에 적재한다. 개별 종목 실패는 건너뛰고
+    나머지는 계속 진행한다(배치 성격 — 부분 실패로 전체를 막지 않는다).
+
+    provider_for_market 미지정 시 실제 DART/SEC 공급자를 쓴다(테스트는 페이크 주입)."""
+    resolver = provider_for_market or (
+        lambda market: equity_financial_provider(project_root, market)
+    )
+    universe = _equity_universe(project_root)
+    repository = JsonIndustryClassificationRepository(project_root / "data" / "industry_map.json")
+    synced: dict[str, IndustryClassification] = dict(repository.load())
+    errors: list[str] = []
+    for market, symbol in universe:
+        key = f"{market}:{symbol}"
+        provider = resolver(market)
+        classification = provider.industry_classification(symbol)
+        if classification is None:
+            errors.append(f"{key}: 업종분류 조회 실패")
+            continue
+        synced[key] = classification
+    repository.save(synced)
+    return IndustrySyncResult(synced=synced, errors=tuple(errors))
 
 
 def real_dashboard_service(project_root: Path) -> DashboardService:

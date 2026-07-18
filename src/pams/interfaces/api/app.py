@@ -46,6 +46,7 @@ from pams.audit.infrastructure import JsonlAuditTrail
 from pams.equity.application import (
     CalculateDcf,
     CalculateRelativeValuation,
+    CompareIndustryPeers,
     LoadGrowthMetrics,
     ScoreCompany,
 )
@@ -69,6 +70,7 @@ from pams.equity.domain.financial_statement import (
 from pams.equity.domain.score import CategoryScore, CompanyScoreReport, ScoreItem
 from pams.equity.infrastructure import (
     DartFinancialStatementProvider,
+    JsonIndustryClassificationRepository,
     PriceTriggerConfigError,
     ScoringConfigError,
     SecEdgarFinancialStatementProvider,
@@ -1542,6 +1544,25 @@ def create_app(
             else relative_valuation.score
         )
 
+        # 업종평균 대비 지표(매출총이익률·ROA·영업이익률순위)는 sync-industry가 미리
+        # 채워둔 업종분류 맵에서 같은 시장·같은 업종코드를 가진 다른 종목(피어)의
+        # 재무제표와 비교해 자동 산출한다 — 피어 종목코드를 이 코드가 지어내지 않는다.
+        industry_repository = JsonIndustryClassificationRepository(
+            storage_dir / "industry_map.json"
+        )
+        # sync-industry가 아직 실행되지 않았거나 피어를 찾지 못한 경우는 market_data
+        # 자동조회 "실패"가 아니라 아직 설정되지 않은 선택 기능일 뿐이다 — 매번
+        # fetch_errors에 안내를 반복하지 않는다(점수표의 "데이터 누락" 표시로 충분).
+        peer_comparison = CompareIndustryPeers(
+            classification_repository=industry_repository,
+            provider_for_market=_equity_financial_provider,
+        ).execute(
+            asset_id=request.asset_id,
+            market=request.market,
+            is_financial=request.is_financial,
+            target_metrics=metrics,
+        )
+
         inputs = CompanyScoreInputs(
             symbol=request.asset_id,
             as_of=as_of(),
@@ -1555,12 +1576,20 @@ def create_app(
             gross_margin_vs_industry_pp=(
                 None
                 if request.is_financial
-                else _optional_decimal(
-                    "gross_margin_vs_industry_pp", request.gross_margin_vs_industry_pp
+                else (
+                    _optional_decimal(
+                        "gross_margin_vs_industry_pp", request.gross_margin_vs_industry_pp
+                    )
+                    if request.gross_margin_vs_industry_pp is not None
+                    else peer_comparison.gross_margin_vs_industry_pp
                 )
             ),
             roa_vs_industry_pp=(
-                _optional_decimal("roa_vs_industry_pp", request.roa_vs_industry_pp)
+                (
+                    _optional_decimal("roa_vs_industry_pp", request.roa_vs_industry_pp)
+                    if request.roa_vs_industry_pp is not None
+                    else peer_comparison.roa_vs_industry_pp
+                )
                 if request.is_financial
                 else None
             ),
@@ -1584,7 +1613,11 @@ def create_app(
             ),
             wacc_estimate=_optional_decimal("wacc", request.wacc),
             wacc_basis=request.wacc_basis,
-            op_margin_industry_rank=request.op_margin_industry_rank,
+            op_margin_industry_rank=(
+                request.op_margin_industry_rank
+                if request.op_margin_industry_rank is not None
+                else peer_comparison.op_margin_industry_rank
+            ),
             fcf_positive_years=metrics.fcf_positive_years,
             # debt_ratio 미입력 시 자동조회된 재무제표(total_debt/total_equity)에서
             # 계산한 값을 쓴다(roe와 동일한 자동조회 우선순위 원칙).
@@ -1653,6 +1686,16 @@ def create_app(
                 # peg가 자동산출된 경우 입력창에 그대로 채워 보여준다(net_debt_used와
                 # 동일한 투명성 원칙).
                 "peg_used": str(peg.quantize(Decimal("0.01"))) if peg is not None else None,
+            },
+            # 업종평균 대비 지표가 피어 비교로 자동산출된 경우 입력창에 채워 보여준다
+            # (net_debt_used·peg_used와 동일한 투명성 원칙).
+            "industry_peer_comparison": {
+                "peer_count": peer_comparison.peer_count,
+                "gross_margin_vs_industry_pp": _ratio_str(
+                    peer_comparison.gross_margin_vs_industry_pp
+                ),
+                "roa_vs_industry_pp": _ratio_str(peer_comparison.roa_vs_industry_pp),
+                "op_margin_industry_rank": peer_comparison.op_margin_industry_rank,
             },
         }
 

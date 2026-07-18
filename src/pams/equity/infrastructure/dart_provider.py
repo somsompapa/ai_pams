@@ -34,10 +34,12 @@ from pams.equity.domain.financial_statement import (
     AnnualFinancialsResult,
     FinancialStatementProviderError,
 )
+from pams.equity.domain.industry_classification import IndustryClassification
 
 _CORP_CODE_URL = "https://opendart.fss.or.kr/api/corpCode.xml"
 _FINANCIALS_URL = "https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json"
 _STOCK_TOTQY_URL = "https://opendart.fss.or.kr/api/stockTotqySttus.json"
+_COMPANY_URL = "https://opendart.fss.or.kr/api/company.json"
 
 # ⚠️ "주식의총수현황"(stockTotqySttus) 응답 필드명은 DART 공식 API 문서 기준 최선 추정이며
 # 실제 응답으로 검증되지 않았다(재무제표 계정명 매칭과 달리 이 엔드포인트는 이 프로젝트에서
@@ -196,6 +198,31 @@ class DartFinancialStatementProvider:
                 if value is not None and value > 0:
                     return value
         return None
+
+    def industry_classification(self, asset_id: str) -> IndustryClassification | None:
+        """DART company.json의 induty_code(표준산업분류 업종코드)를 그대로 쓴다.
+        조회 실패·계정 없음이면 조용히 None — 임의로 업종을 지어내지 않는다."""
+        try:
+            corp_map = self._corp_code_map()
+        except FinancialStatementProviderError:
+            return None
+        corp_code = corp_map.get(asset_id)
+        if not corp_code:
+            return None
+        try:
+            with self._client() as client:
+                response = client.get(
+                    _COMPANY_URL, params={"crtfc_key": self.api_key, "corp_code": corp_code}
+                )
+            data: dict[str, Any] = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        if data.get("status") != "000":
+            return None
+        code = (data.get("induty_code") or "").strip()
+        if not code:
+            return None
+        return IndustryClassification(code=code)
 
     def annual_financials(self, asset_id: str, *, years: int = 4) -> AnnualFinancialsResult:
         if not self.api_key.strip():

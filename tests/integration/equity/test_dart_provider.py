@@ -437,3 +437,49 @@ class TestIncomeTaxExpense:
         provider = self.make(handler, tmp_path)
         result = provider.annual_financials("352820", years=1)
         assert result.annual[0].income_tax_expense == Decimal("250000000")
+
+
+class TestIndustryClassification:
+    """company.json의 induty_code(업종코드)를 임의 추정 없이 그대로 매칭 키로 쓴다."""
+
+    def make(self, handler, tmp_path) -> DartFinancialStatementProvider:  # type: ignore[no-untyped-def]
+        return DartFinancialStatementProvider(
+            api_key="test-key",
+            corp_code_cache_path=tmp_path / "corp_code_cache.xml",
+            transport=httpx.MockTransport(handler),
+        )
+
+    def test_returns_induty_code(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "corpCode" in url:
+                return httpx.Response(200, content=_corp_code_zip_bytes())
+            if "company.json" in url:
+                return httpx.Response(200, json={"status": "000", "induty_code": "26410"})
+            return httpx.Response(200, json={"status": "013"})
+
+        provider = self.make(handler, tmp_path)
+        result = provider.industry_classification("352820")
+        assert result is not None
+        assert result.code == "26410"
+
+    def test_unknown_stock_code_returns_none(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "corpCode" in str(request.url):
+                return httpx.Response(200, content=_corp_code_zip_bytes())
+            return httpx.Response(200, json={"status": "013"})
+
+        provider = self.make(handler, tmp_path)
+        assert provider.industry_classification("999999") is None
+
+    def test_company_lookup_failure_returns_none_not_raises(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "corpCode" in url:
+                return httpx.Response(200, content=_corp_code_zip_bytes())
+            if "company.json" in url:
+                return httpx.Response(500, json={"status": "500"})
+            return httpx.Response(200, json={"status": "013"})
+
+        provider = self.make(handler, tmp_path)
+        assert provider.industry_classification("352820") is None

@@ -26,6 +26,12 @@
       '오늘의 액션'(가격 트리거·리밸런싱)을 텔레그램으로 보낸다.
       새로 발동한 신호만 알린다(중복 방지). DCA는 이미 정해진 일정이라 제외.
       환경변수 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID 필요.
+
+  sync-industry [--root DIR]
+      config/assets/default.yaml에 등록된 국내/미국 주식의 업종분류(DART
+      induty_code/SEC SIC 코드)를 조회해 data/industry_map.json에 적재한다.
+      종목분석의 "업종평균 대비" 지표(매출총이익률·ROA·영업이익률)가 이 맵에서
+      같은 업종코드를 가진 다른 종목을 찾아 자동 비교한다. 주기 실행 권장(cron).
 """
 
 from __future__ import annotations
@@ -173,6 +179,16 @@ def _run_alert(root: Path, as_of: date) -> int:
     return 0
 
 
+def _run_sync_industry(root: Path, as_of: date) -> int:
+    from pams.interfaces.wiring import sync_industry_classifications
+
+    result = sync_industry_classifications(root)
+    print(f"업종분류 동기화 완료: {len(result.synced)}건 적재")
+    for error in result.errors:
+        print(f"  경고: {error}", file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pams")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -183,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         ("report", "투자 보고서 생성 (reports/)"),
         ("alert", "규칙 발동 시 텔레그램 알림"),
         ("signals", "오늘의 액션(가격 트리거·리밸런싱) 텔레그램 알림"),
+        ("sync-industry", "국내/미국 주식 업종분류 동기화 (data/industry_map.json)"),
     ):
         sub = subcommands.add_parser(name, help=description)
         sub.add_argument("--date", dest="as_of", default=None, help="YYYY-MM-DD (기본: 오늘)")
@@ -198,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         "report": _run_report,
         "alert": _run_alert,
         "signals": _run_signals,
+        "sync-industry": _run_sync_industry,
     }
 
     try:

@@ -1,5 +1,6 @@
 """POST /api/equity-score 통합 테스트. 실네트워크 없이 페이크 FinancialStatementProvider 주입."""
 
+import json
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -721,3 +722,118 @@ class TestNegativeLatestYearDoesNotCrash:
         growth = next(c for c in body["score"]["categories"] if c["category"] == "성장성")
         eps_item = next(i for i in growth["items"] if i["metric"] == "EPS 3Y CAGR")
         assert eps_item["value"] == "—"
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeMultiSymbolProvider:
+    """자산코드별로 다른 재무제표를 돌려준다 — 피어 비교는 대상+피어 여러 종목을
+    같은 시장 provider로 조회하므로 단일 result만 반환하는 _FakeProvider로는 부족하다."""
+
+    by_symbol: dict[str, AnnualFinancialsResult]
+
+    def annual_financials(self, asset_id: str, *, years: int = 4) -> AnnualFinancialsResult:
+        return self.by_symbol[asset_id]
+
+
+class TestIndustryPeerComparisonAutoFill:
+    """업종평균 대비 지표(매출총이익률·ROA·영업이익률순위)는 sync-industry가 미리
+    적재한 data/industry_map.json에서 같은 업종코드를 가진 다른 종목(피어)의
+    재무제표로 자동 계산돼야 한다."""
+
+    def test_gross_margin_vs_industry_auto_filled_from_peer(self, tmp_path: Path) -> None:
+        (tmp_path / "industry_map.json").write_text(
+            json.dumps(
+                {
+                    "US:TEST": {"code": "26410", "name": None},
+                    "US:PEER": {"code": "26410", "name": None},
+                }
+            ),
+            encoding="utf-8",
+        )
+        provider = _FakeMultiSymbolProvider(
+            {
+                "TEST": AnnualFinancialsResult(
+                    asset_id="TEST",
+                    data_source="fake",
+                    annual=(
+                        AnnualFinancials(
+                            fiscal_year=2025, revenue=Decimal(1000), gross_profit=Decimal(400)
+                        ),
+                    ),
+                ),
+                "PEER": AnnualFinancialsResult(
+                    asset_id="PEER",
+                    data_source="fake",
+                    annual=(
+                        AnnualFinancials(
+                            fiscal_year=2025, revenue=Decimal(1000), gross_profit=Decimal(300)
+                        ),
+                    ),
+                ),
+            }
+        )
+        client = _client(tmp_path, provider)  # type: ignore[arg-type]
+        payload = {**_BASE_PAYLOAD, "gross_margin_vs_industry_pp": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+
+        # target 매출총이익률 400/1000=0.40, peer 300/1000=0.30 → pp 차이 +0.10
+        comp = next(c for c in body["score"]["categories"] if c["category"] == "경쟁력")
+        item = next(i for i in comp["items"] if "매출총이익률" in i["metric"])
+        assert item["value"] == "0.1000"
+
+        assert body["industry_peer_comparison"]["peer_count"] == 1
+        assert body["industry_peer_comparison"]["gross_margin_vs_industry_pp"] == "0.1000"
+
+    def test_no_peer_available_leaves_field_missing(self, tmp_path: Path) -> None:
+        """업종분류 맵이 없으면(sync-industry 미실행) 기존 그대로 '데이터 누락'."""
+        provider = _FakeProvider(
+            AnnualFinancialsResult(
+                asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+            )
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "gross_margin_vs_industry_pp": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+
+        comp = next(c for c in body["score"]["categories"] if c["category"] == "경쟁력")
+        item = next(i for i in comp["items"] if "매출총이익률" in i["metric"])
+        assert item["value"] == "—"
+
+    def test_explicit_value_not_overridden_by_peer_data(self, tmp_path: Path) -> None:
+        (tmp_path / "industry_map.json").write_text(
+            json.dumps(
+                {
+                    "US:TEST": {"code": "26410", "name": None},
+                    "US:PEER": {"code": "26410", "name": None},
+                }
+            ),
+            encoding="utf-8",
+        )
+        provider = _FakeMultiSymbolProvider(
+            {
+                "TEST": AnnualFinancialsResult(
+                    asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+                ),
+                "PEER": AnnualFinancialsResult(
+                    asset_id="PEER",
+                    data_source="fake",
+                    annual=(
+                        AnnualFinancials(
+                            fiscal_year=2025, revenue=Decimal(1000), gross_profit=Decimal(300)
+                        ),
+                    ),
+                ),
+            }
+        )
+        client = _client(tmp_path, provider)  # type: ignore[arg-type]
+        payload = {**_BASE_PAYLOAD, "gross_margin_vs_industry_pp": "0.99"}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+        comp = next(c for c in body["score"]["categories"] if c["category"] == "경쟁력")
+        item = next(i for i in comp["items"] if "매출총이익률" in i["metric"])
+        assert item["value"] == "0.9900"

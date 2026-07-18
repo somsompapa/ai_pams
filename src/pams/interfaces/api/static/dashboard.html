@@ -1614,10 +1614,15 @@ function renderEquityScore(body) {
   const table = "<table><thead><tr><th>대분류</th><th>지표</th><th>값</th><th>구간</th><th>점수</th><th>비고</th></tr></thead><tbody>" +
     rows.map((r) => "<tr>" + r.map((c) => "<td>" + esc(c) + "</td>").join("") + "</tr>").join("") +
     "</tbody></table>";
-  const hasMissing = rows.some((r) => r[2] === "—" || r[5].includes("데이터 누락"));
-  const missingNote = hasMissing
-    ? "<p class=\"hint\">💡 \"데이터 누락\"은 값을 추정하지 않고 0점 처리했다는 뜻입니다 — " +
-      "직접 입력하면 점수에 반영됩니다.</p>"
+  // 성장성·경쟁력/재무/상대지표/리스크 섹션이 접힌 채로 제출되면 그 안의 입력을
+  // 놓친 줄 모르고 "왜 점수가 낮지"로 오해할 수 있다 — 몇 점이 미입력 때문인지
+  // 총점 바로 아래에서 수치로 보여준다(위쪽 접힌 섹션을 펼치면 채울 수 있다는 안내와 함께).
+  const missingRows = rows.filter((r) => r[2] === "—" || r[5].includes("데이터 누락"));
+  const missingPoints = missingRows.reduce((sum, r) => sum + Number(r[4].split("/")[1] || 0), 0);
+  const missingNote = missingRows.length
+    ? "<p class=\"hint\">⚠️ " + missingRows.length + "개 항목(배점 " + missingPoints + "점)이 미입력으로 " +
+      "0점 처리됐습니다 — 위쪽 \"▸\"로 접힌 섹션(성장성·경쟁력/재무/상대지표/리스크)을 펼쳐 값을 " +
+      "입력하면 점수에 반영됩니다. 값을 추정해 채우지 않으므로 직접 입력해야만 합니다.</p>"
     : "";
 
   const md = body.market_data;

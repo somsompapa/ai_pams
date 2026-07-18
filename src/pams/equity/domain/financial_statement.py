@@ -31,6 +31,10 @@ class AnnualFinancials:
     operating_income: Decimal | None = None
     net_income: Decimal | None = None
     eps: Decimal | None = None
+    # True면 EPS 계정 자체를 찾지 못해 순이익÷발행주식수로 역산한 값(항등식 기반이라
+    # 임의 추정이 아니다 — total_equity_derived와 같은 관례). 지배주주 귀속 순이익이 아닌
+    # 연결 순이익 전체를 쓰므로 비지배지분이 큰 회사는 실제 공시 EPS보다 다소 높게 나올 수 있다.
+    eps_derived: bool = False
     gross_profit: Decimal | None = None
     total_assets: Decimal | None = None
     total_equity: Decimal | None = None

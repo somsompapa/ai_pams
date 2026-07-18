@@ -308,3 +308,98 @@ class TestSharesOutstanding:
         result = provider.annual_financials("352820", years=1)
         assert result.annual[0].revenue == Decimal("1000")
         assert result.annual[0].shares_outstanding is None
+
+
+class TestEpsFallback:
+    """삼성전자(005930) 실사용 사례 재현: EPS 계정명 매칭이 실패해도 순이익÷발행주식수로
+    역산해야 한다(항등식 기반, total_equity_derived와 같은 관례) — 임의추정 금지는
+    지키면서 이미 조회된 값으로 계산 가능한 항목까지 '데이터 누락' 처리하지 않는다."""
+
+    def make(self, handler, tmp_path) -> DartFinancialStatementProvider:  # type: ignore[no-untyped-def]
+        return DartFinancialStatementProvider(
+            api_key="test-key",
+            corp_code_cache_path=tmp_path / "corp_code_cache.xml",
+            transport=httpx.MockTransport(handler),
+        )
+
+    def test_eps_derived_from_net_income_and_shares_when_account_missing(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "corpCode" in url:
+                return httpx.Response(200, content=_corp_code_zip_bytes())
+            if "stockTotqySttus" in url:
+                return httpx.Response(
+                    200,
+                    json={"status": "000", "list": [{"se": "합계", "distb_stock_co": "5,000"}]},
+                )
+            year = request.url.params.get("bsns_year")
+            if year != "2025":
+                return httpx.Response(200, json={"status": "013", "message": "no data"})
+            return httpx.Response(
+                200,
+                json={
+                    "status": "000",
+                    # '기본주당이익' 등 EPS 계정 자체가 응답에 없음(실측 상황 재현) —
+                    # 순이익만 있음
+                    "list": [_dart_item("당기순이익", "1,000,000")],
+                },
+            )
+
+        provider = self.make(handler, tmp_path)
+        result = provider.annual_financials("352820", years=1)
+        row = result.annual[0]
+        assert row.eps == Decimal("200")  # 1,000,000 / 5,000
+        assert row.eps_derived is True
+
+    def test_direct_eps_account_preferred_over_derived(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "corpCode" in url:
+                return httpx.Response(200, content=_corp_code_zip_bytes())
+            if "stockTotqySttus" in url:
+                return httpx.Response(
+                    200,
+                    json={"status": "000", "list": [{"se": "합계", "distb_stock_co": "5,000"}]},
+                )
+            year = request.url.params.get("bsns_year")
+            if year != "2025":
+                return httpx.Response(200, json={"status": "013", "message": "no data"})
+            return httpx.Response(
+                200,
+                json={
+                    "status": "000",
+                    "list": [
+                        _dart_item("당기순이익", "1,000,000"),
+                        _dart_item("기본주당이익", "150"),
+                    ],
+                },
+            )
+
+        provider = self.make(handler, tmp_path)
+        result = provider.annual_financials("352820", years=1)
+        row = result.annual[0]
+        assert row.eps == Decimal("150")  # 공시된 값 그대로, 역산하지 않음
+        assert row.eps_derived is False
+
+    def test_eps_stays_none_when_shares_outstanding_also_missing(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        """발행주식수까지 조회 실패하면 역산 자체가 불가능하므로 정직하게 None으로
+        남는다(임의추정 금지 — 데이터가 진짜 없을 때는 없다고 해야 한다)."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "corpCode" in url:
+                return httpx.Response(200, content=_corp_code_zip_bytes())
+            if "stockTotqySttus" in url:
+                return httpx.Response(500, json={"status": "500", "message": "error"})
+            year = request.url.params.get("bsns_year")
+            if year != "2025":
+                return httpx.Response(200, json={"status": "013", "message": "no data"})
+            return httpx.Response(
+                200, json={"status": "000", "list": [_dart_item("당기순이익", "1,000,000")]}
+            )
+
+        provider = self.make(handler, tmp_path)
+        result = provider.annual_financials("352820", years=1)
+        row = result.annual[0]
+        assert row.eps is None
+        assert row.eps_derived is False

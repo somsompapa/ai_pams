@@ -151,6 +151,29 @@
   .guide-steps { list-style: none; padding: 0; margin: 0.5rem 0; display: flex; flex-direction: column; gap: 0.6rem; }
   .guide-steps li { background: var(--bg); border-radius: 0.6rem; padding: 0.6rem 0.8rem; line-height: 1.5; }
   .wide { grid-column: 1 / -1; }
+
+  .spinner {
+    display: inline-block; width: 0.9em; height: 0.9em; border-radius: 50%;
+    border: 2px solid var(--line); border-top-color: var(--accent, #3b82f6);
+    animation: pams-spin 0.7s linear infinite; vertical-align: -0.15em;
+  }
+  @keyframes pams-spin { to { transform: rotate(360deg); } }
+
+  #toast-container {
+    position: fixed; top: 0.8rem; left: 50%; transform: translateX(-50%);
+    z-index: 1000; display: flex; flex-direction: column; gap: 0.4rem; align-items: center;
+    pointer-events: none; width: min(92vw, 420px);
+  }
+  .toast {
+    background: var(--card); color: var(--text); border: 1px solid var(--line);
+    border-left: 3px solid var(--muted); border-radius: 0.5rem; padding: 0.55rem 0.9rem;
+    font-size: 0.85rem; box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    opacity: 0; transform: translateY(-0.5rem); transition: opacity 0.2s, transform 0.2s;
+    max-width: 100%;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast-success { border-left-color: var(--ok); }
+  .toast-error { border-left-color: var(--bad); }
   .ai-controls { display: flex; gap: 0.5rem; margin-bottom: 0.7rem; }
   select, input, textarea, form button {
     background: var(--bg); color: var(--text); border: 1px solid var(--line);
@@ -399,6 +422,22 @@
     </form>
     <p id="as-msg" class="empty">추가하면 거래 입력·시세 자동수집에서 이 종목을 쓸 수 있다.</p>
     <div class="holdings-scroll"><table id="asset-table"></table></div>
+
+    <details class="sub-form">
+      <summary>＋ CSV로 여러 종목 한 번에 등록</summary>
+      <p class="empty" style="margin-top:0">
+        보유 종목이 많으면 하나씩 등록하는 대신 CSV 파일로 한 번에 올릴 수 있다. 첫 줄은
+        헤더여야 하며, 필수 열은 <code>asset_id,name,asset_class,currency,country</code>다.
+        <code>sector,yahoo_symbol,exceptional_quality_reason</code>은 있으면 쓰고 없어도 된다.
+        일부 행이 실패해도(예: 이미 등록된 종목) 나머지 행은 그대로 등록되고, 실패한 행만
+        아래에 사유와 함께 표시된다.
+      </p>
+      <form id="asset-csv-form" class="tx-form">
+        <input type="file" id="as-csv-file" accept=".csv,text/csv">
+        <button type="submit">CSV 업로드</button>
+      </form>
+      <div id="as-csv-result"></div>
+    </details>
   </section>
   <section class="card wide" data-tab="manage">
     <h2>환율 입력</h2>
@@ -460,41 +499,50 @@
       </div>
       <input id="eq-wacc-basis" placeholder="WACC 근거 (예: CAPM 10.3%+세후부채3.5%→8.5%, 기본값 사용 시 비워도 됨)">
 
-      <h3>성장성 · 경쟁력</h3>
-      <div class="grid2">
-        <input id="eq-tam-cagr" placeholder="산업 TAM CAGR (%, 컨센서스 기준)">
-        <select id="eq-share-trend">
-          <option value="">시장점유율 추이 — 선택 안 함(데이터 누락)</option>
-          <option value="up">상승</option>
-          <option value="flat">횡보</option>
-          <option value="down">하락</option>
-        </select>
-        <input id="eq-gross-margin" placeholder="매출총이익률 업종평균 대비(%p) — 비금융업">
-        <input id="eq-roa" placeholder="ROA 업종평균 대비(%p) — 금융업">
-      </div>
-      <div class="grid2">
-        <label><input type="checkbox" id="eq-eb-regulatory"> 규제/라이선스 장벽(+2)</label>
-        <select id="eq-eb-capital">
-          <option value="none">자본집약도 — 해당 없음</option>
-          <option value="normal">자본집약도(+1)</option>
-          <option value="extreme">자본집약도 초고강도(+2)</option>
-        </select>
-        <label><input type="checkbox" id="eq-eb-network"> 네트워크효과·전환비용(+1)</label>
-      </div>
-      <input id="eq-eb-basis" placeholder="진입장벽 근거 문장 (필수 — 없으면 무효 처리 권장)">
+      <details class="sub-form">
+        <summary>＋ 성장성 · 경쟁력 — 업종 비교는 직접 조사 필요(선택)</summary>
+        <p class="hint">
+          💡 매출총이익률·영업이익률·ROA의 "업종평균 대비" 값은 자동조회할 수 없다 — 업종
+          벤치마크 데이터를 제공하는 외부 소스가 아직 연결돼 있지 않기 때문이다(FnGuide·Bloomberg
+          등에서 직접 조회해 입력해야 한다). 비워두면 해당 항목은 0점+"데이터 누락"으로 처리된다.
+        </p>
+        <div class="grid2">
+          <input id="eq-tam-cagr" placeholder="산업 TAM CAGR (%, 컨센서스 기준)">
+          <select id="eq-share-trend">
+            <option value="">시장점유율 추이 — 선택 안 함(데이터 누락)</option>
+            <option value="up">상승</option>
+            <option value="flat">횡보</option>
+            <option value="down">하락</option>
+          </select>
+          <input id="eq-gross-margin" placeholder="매출총이익률 업종평균 대비(%p) — 비금융업, 직접 조사">
+          <input id="eq-roa" placeholder="ROA 업종평균 대비(%p) — 금융업, 직접 조사">
+        </div>
+        <div class="grid2">
+          <label><input type="checkbox" id="eq-eb-regulatory"> 규제/라이선스 장벽(+2)</label>
+          <select id="eq-eb-capital">
+            <option value="none">자본집약도 — 해당 없음</option>
+            <option value="normal">자본집약도(+1)</option>
+            <option value="extreme">자본집약도 초고강도(+2)</option>
+          </select>
+          <label><input type="checkbox" id="eq-eb-network"> 네트워크효과·전환비용(+1)</label>
+        </div>
+        <input id="eq-eb-basis" placeholder="진입장벽 근거 문장 (필수 — 없으면 무효 처리 권장)">
+      </details>
 
-      <h3>재무</h3>
-      <div class="grid2">
-        <input id="eq-roe" placeholder="ROE (%) — 비워두면 재무제표에서 자동 계산">
-        <input id="eq-roic" placeholder="ROIC (%, WACC와 비교)">
-        <select id="eq-op-margin-rank">
-          <option value="">영업이익률 업종 순위 — 선택 안 함</option>
-          <option value="top30">업종 상위30%</option>
-          <option value="mid">중위</option>
-          <option value="bottom">하위</option>
-        </select>
-        <input id="eq-debt-ratio" placeholder="부채비율(총부채/자기자본, %) — 비금융업만, 비워두면 자동 계산">
-      </div>
+      <details class="sub-form">
+        <summary>＋ 재무 — ROE·부채비율은 자동 계산(선택 항목만 직접 입력)</summary>
+        <div class="grid2">
+          <input id="eq-roe" placeholder="ROE (%) — 비워두면 재무제표에서 자동 계산">
+          <input id="eq-roic" placeholder="ROIC (%, WACC와 비교)">
+          <select id="eq-op-margin-rank">
+            <option value="">영업이익률 업종 순위 — 선택 안 함(직접 조사 필요)</option>
+            <option value="top30">업종 상위30%</option>
+            <option value="mid">중위</option>
+            <option value="bottom">하위</option>
+          </select>
+          <input id="eq-debt-ratio" placeholder="부채비율(총부채/자기자본, %) — 비금융업만, 비워두면 자동 계산">
+        </div>
+      </details>
 
       <details class="sub-form">
         <summary>＋ 상대지표(PER/PBR/PEG) — 선택, DCF 교차검증 보조</summary>
@@ -572,6 +620,20 @@
       값이 자동으로 채워진다 — 그대로 쓰거나 직접 고쳐도 된다. 매수 전 B-3 체크리스트의
       포트폴리오 집중도 한도(개별 20%, 초우량 예외 30%)는 이 4개 조건에는 포함되지
       않는다 — "분석" 탭의 알림(규정준수 위반)에서 별도로 확인한다.
+    </p>
+    <form id="bg-quickfill-form" class="tx-form">
+      <input id="bg-quick-symbol" placeholder="종목 심볼 (예: AAPL, 005930) — 여기 입력 후 자동 채우기">
+      <select id="bg-quick-market">
+        <option value="US">미국 (SEC EDGAR)</option>
+        <option value="KR">한국 (DART)</option>
+      </select>
+      <button type="submit">종목분석 자동 실행 후 채우기</button>
+    </form>
+    <p id="bg-quick-msg" class="hint">
+      💡 "종목분석" 탭을 먼저 방문하지 않아도 된다 — 심볼만 입력하면 기업 점수·DCF 괴리율을
+      기본 가정(WACC 8.5%, g 2.5%)으로 자동 계산해 아래 칸을 채운다. 시장점유율·진입장벽처럼
+      정성 판단이 필요한 항목은 반영되지 않으므로, 정밀한 점수가 필요하면 "종목분석" 탭에서
+      직접 입력한 뒤 계산하는 편이 정확하다.
     </p>
     <form id="bg-form">
       <div class="grid2">
@@ -678,6 +740,32 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
 const el = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
   ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+// 저장/실패 피드백을 공통 토스트로 통일 — 폼마다 표시 방식이 제각각이던 것을 하나로 모은다.
+// 각 폼의 인라인 메시지(-msg 요소)는 상세 사유용으로 그대로 유지하고, 토스트는 화면 어디에
+// 있든 바로 보이는 즉각적 확인용으로 덧붙인다.
+let toastContainer = null;
+function toast(message, kind) {
+  if (!toastContainer) {
+    toastContainer = document.createElement("div");
+    toastContainer.id = "toast-container";
+    document.body.appendChild(toastContainer);
+  }
+  const node = document.createElement("div");
+  node.className = "toast " + (kind === "error" ? "toast-error" : "toast-success");
+  node.textContent = message;
+  toastContainer.appendChild(node);
+  requestAnimationFrame(() => node.classList.add("show"));
+  setTimeout(() => {
+    node.classList.remove("show");
+    setTimeout(() => node.remove(), 300);
+  }, 3200);
+}
+
+// 계산·조회 중임을 텍스트만이 아니라 시각적으로도 보여주는 공통 로딩 표시.
+function loadingHtml(text) {
+  return '<span class="spinner" aria-hidden="true"></span> ' + esc(text);
+}
 
 function bars(entries) {
   return entries.map((e) => {
@@ -1063,6 +1151,7 @@ guardSubmit(el("tx-form"), async () => {
     resetTxEditMode();
     msg.className = "";
     msg.textContent = (editId ? "✅ 수정 완료" : "✅ 기록 완료") + " — 다시 계산 중…";
+    toast(editId ? "거래 수정 완료" : "거래 기록 완료", "success");
     load();
     loadTransactions();
     loadAudit();
@@ -1070,6 +1159,7 @@ guardSubmit(el("tx-form"), async () => {
     const body = await response.json().catch(() => ({}));
     msg.className = "";
     msg.textContent = (editId ? "수정 실패: " : "기록 실패: ") + (body.detail ?? response.status);
+    toast(editId ? "거래 수정 실패" : "거래 기록 실패", "error");
   }
 });
 
@@ -1090,12 +1180,14 @@ guardSubmit(el("cash-reconcile-form"), async () => {
     msg.textContent = body.transaction_id
       ? `✅ 보정 완료 (차액 ${body.diff}) — 다시 계산 중…`
       : "이미 일치한다 (보정 불필요).";
+    toast(body.transaction_id ? "현금 보정 완료" : "이미 일치함", "success");
     if (body.transaction_id) el("cash-reconcile-form").reset();
     load();
     loadTransactions();
     loadAudit();
   } else {
     msg.textContent = "실패: " + (body.detail ?? response.status);
+    toast("현금 보정 실패", "error");
   }
 });
 
@@ -1122,12 +1214,14 @@ guardSubmit(el("holding-reconcile-form"), async () => {
     msg.textContent = body.transaction_id
       ? `✅ 보정 완료 (차액 ${body.diff}주) — 다시 계산 중…`
       : "이미 일치한다 (보정 불필요).";
+    toast(body.transaction_id ? "보유수량 보정 완료" : "이미 일치함", "success");
     if (body.transaction_id) el("holding-reconcile-form").reset();
     load();
     loadTransactions();
     loadAudit();
   } else {
     msg.textContent = "실패: " + (body.detail ?? response.status);
+    toast("보유수량 보정 실패", "error");
   }
 });
 
@@ -1142,12 +1236,14 @@ async function postConfig(url, payload, msgId) {
   msg.className = "";
   if (response.ok) {
     msg.textContent = "✅ 저장 완료 — 다시 계산 중…";
+    toast("저장 완료", "success");
     load();
     loadAudit();
     return true;
   }
   const body = await response.json().catch(() => ({}));
   msg.textContent = "저장 실패: " + (body.detail ?? response.status);
+  toast("저장 실패", "error");
   return false;
 }
 
@@ -1177,12 +1273,14 @@ guardSubmit(el("bulk-trigger-form"), async () => {
   msg.className = "";
   if (!response.ok) {
     msg.textContent = "실패: " + (body.detail ?? response.status);
+    toast("일괄 트리거 적용 실패", "error");
     el("bt-result").innerHTML = "";
     return;
   }
   const applied = body.applied || [];
   const skipped = body.skipped || [];
   msg.textContent = `적용 ${applied.length}건, 건너뜀 ${skipped.length}건`;
+  toast(`일괄 트리거 적용 ${applied.length}건 완료` + (skipped.length ? ` (${skipped.length}건 건너뜀)` : ""), "success");
   el("bt-result").innerHTML = `
     ${applied.length ? `<p><strong>적용됨</strong></p><ul>${applied.map((a) =>
       `<li>${esc(a.name)}(${esc(a.asset_id)}): 손절 ${esc(a.stop_loss_at)} · 매수 ${esc(a.buy_at)} · 익절 ${esc(a.take_profit_at)}</li>`
@@ -1290,12 +1388,62 @@ guardSubmit(el("asset-form"), async () => {
     el("asset-form").reset();
     resetAssetEditMode();
     msg.textContent = (editId ? "✅ 수정 완료" : "✅ 추가 완료") + " — 다시 계산 중…";
+    toast(editId ? "종목 수정 완료" : "종목 추가 완료", "success");
     load();
     loadAssets();
     loadAudit();
   } else {
     const body = await response.json().catch(() => ({}));
     msg.textContent = (editId ? "수정 실패: " : "추가 실패: ") + (body.detail ?? response.status);
+    toast(editId ? "종목 수정 실패" : "종목 추가 실패", "error");
+  }
+});
+
+guardSubmit(el("asset-csv-form"), async () => {
+  const result = el("as-csv-result");
+  const fileInput = el("as-csv-file");
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) {
+    result.className = "empty";
+    result.textContent = "CSV 파일을 먼저 선택하라.";
+    return;
+  }
+  result.className = "empty";
+  result.innerHTML = loadingHtml("업로드 중…");
+  const csvText = await file.text();
+  const response = await fetch("/api/assets/bulk-import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ csv_text: csvText }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    result.className = "";
+    result.textContent = "업로드 실패: " + (body.detail ?? response.status);
+    toast("CSV 업로드 실패", "error");
+    return;
+  }
+  const body = await response.json();
+  result.className = "";
+  let html = "<p>✅ " + body.created_count + "건 등록";
+  if (body.error_count) html += " · ⚠️ " + body.error_count + "건 실패";
+  html += "</p>";
+  if (body.errors.length) {
+    html += "<table><thead><tr><th>행</th><th>종목코드</th><th>실패 사유</th></tr></thead><tbody>" +
+      body.errors.map((e) =>
+        "<tr><td>" + e.row + "</td><td>" + esc(e.asset_id) + "</td><td>" + esc(e.reason) + "</td></tr>"
+      ).join("") + "</tbody></table>";
+  }
+  result.innerHTML = html;
+  fileInput.value = "";
+  toast(
+    body.created_count + "건 등록 완료" + (body.error_count ? " (" + body.error_count + "건 실패)" : ""),
+    body.error_count && !body.created_count ? "error" : "success"
+  );
+  if (body.created_count) {
+    load();
+    loadAssets();
+    loadAudit();
   }
 });
 
@@ -1315,11 +1463,13 @@ guardSubmit(el("fx-form"), async () => {
   if (response.ok) {
     el("fx-form").reset();
     msg.textContent = "✅ 저장 완료 — 다시 계산 중…";
+    toast("환율 저장 완료", "success");
     load();
     loadAudit();
   } else {
     const body = await response.json().catch(() => ({}));
     msg.textContent = "저장 실패: " + (body.detail ?? response.status);
+    toast("환율 저장 실패", "error");
   }
 });
 
@@ -1336,11 +1486,12 @@ guardSubmit(el("journal-form"), async () => {
   });
   if (response.ok) {
     el("journal-form").reset();
+    toast("투자일지 기록 완료", "success");
     loadJournal();
     loadAudit();
   } else {
     const body = await response.json().catch(() => ({}));
-    alert("기록 실패: " + (body.detail ?? response.status));
+    toast("투자일지 기록 실패: " + (body.detail ?? response.status), "error");
   }
 });
 
@@ -1358,7 +1509,7 @@ el("ai-run").addEventListener("click", async () => {
     return;
   }
   el("ai-output").className = "empty";
-  el("ai-output").textContent = "생성 중…";
+  el("ai-output").innerHTML = loadingHtml("생성 중…");
   const payload = { kind };
   if (kind === "stock_trigger") payload.asset_id = el("ai-stock").value;
   const response = await fetch("/api/analysis", {
@@ -1515,6 +1666,13 @@ function renderEquityScore(body) {
     " · 데이터 품질 플래그: " + esc(flags) + "</p>" +
     autoFetchNote + missingNote + dcfHtml + rvHtml + table;
 
+  applyEquityScoreToGates(body);
+}
+
+// 종목분석 결과를 매매판정 탭(매수 게이트·매도 검토)에 채워 넣는다. eq-form 제출 후와,
+// 매매판정 탭의 "종목 심볼로 자동 채우기"(원클릭 연동) 양쪽에서 재사용한다.
+function applyEquityScoreToGates(body) {
+  const score = body.score;
   el("bg-total-score").value = score.total_score;
   const gapRatio = body.dcf && body.dcf.gap ? body.dcf.gap.gap_ratio : "";
   if (gapRatio) {
@@ -1525,7 +1683,7 @@ function renderEquityScore(body) {
 
 guardSubmit(el("eq-form"), async () => {
   el("eq-output").className = "empty";
-  el("eq-output").textContent = "조회·계산 중…";
+  el("eq-output").innerHTML = loadingHtml("조회·계산 중…");
 
   const riskDeductions = [];
   const riskBasis = el("eq-risk-basis").value;
@@ -1607,7 +1765,7 @@ function renderMarketRegime(body) {
 
 guardSubmit(el("mr-form"), async () => {
   el("mr-output").className = "empty";
-  el("mr-output").textContent = "판정 중…";
+  el("mr-output").innerHTML = loadingHtml("판정 중…");
 
   const payload = {
     vix: raw("mr-vix"),
@@ -1631,6 +1789,45 @@ guardSubmit(el("mr-form"), async () => {
   }
 });
 
+guardSubmit(el("bg-quickfill-form"), async () => {
+  const msg = el("bg-quick-msg");
+  const symbol = el("bg-quick-symbol").value.trim();
+  if (!symbol) {
+    msg.className = "";
+    msg.textContent = "종목 심볼을 먼저 입력하라.";
+    return;
+  }
+  msg.className = "";
+  msg.innerHTML = loadingHtml("종목분석 실행 중…");
+  const response = await fetch("/api/equity-score", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      asset_id: symbol,
+      market: el("bg-quick-market").value,
+      wacc: "0.085",
+      terminal_growth: "0.025",
+      growth_path: ["0.10", "0.10", "0.08", "0.08", "0.08"],
+      entry_barrier_capital_intensity: "none",
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    msg.className = "hint";
+    msg.textContent = "자동 채우기 실패: " + (body.detail ?? response.status);
+    toast("종목분석 자동 실행 실패", "error");
+    return;
+  }
+  const body = await response.json();
+  applyEquityScoreToGates(body);
+  msg.className = "hint";
+  msg.textContent =
+    "💡 " + esc(symbol) + " 총점 " + esc(body.score.total_score) + "/100 → 아래 칸에 채워짐. " +
+    "시장점유율·진입장벽 등은 입력하지 않아 실제 점수보다 낮게 나올 수 있다 — 정밀한 판정은 " +
+    "\"종목분석\" 탭에서 직접 입력한 뒤 진행하라.";
+  toast(symbol + " 자동 채우기 완료", "success");
+});
+
 function renderBuyGate(body) {
   const rows = body.conditions.map((c) => [c.condition, c.met ? "충족" : "미충족", c.detail]);
   const table = "<table><thead><tr><th>조건</th><th>충족 여부</th><th>근거</th></tr></thead><tbody>" +
@@ -1644,7 +1841,7 @@ function renderBuyGate(body) {
 
 guardSubmit(el("bg-form"), async () => {
   el("bg-output").className = "empty";
-  el("bg-output").textContent = "판정 중…";
+  el("bg-output").innerHTML = loadingHtml("판정 중…");
 
   const payload = {
     total_score: raw("bg-total-score"),
@@ -1684,7 +1881,7 @@ function renderSellReview(body) {
 
 guardSubmit(el("sr-form"), async () => {
   el("sr-output").className = "empty";
-  el("sr-output").textContent = "검토 중…";
+  el("sr-output").innerHTML = loadingHtml("검토 중…");
 
   const decel = el("sr-growth-decel").value.trim();
   const payload = {
@@ -1711,7 +1908,7 @@ guardSubmit(el("sr-form"), async () => {
 
 el("rp-load").addEventListener("click", async () => {
   el("rp-output").className = "empty";
-  el("rp-output").textContent = "조회 중…";
+  el("rp-output").innerHTML = loadingHtml("조회 중…");
 
   const response = await fetch("/api/realized-performance");
   const body = await response.json().catch(() => ({}));

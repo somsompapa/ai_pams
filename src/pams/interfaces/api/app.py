@@ -11,6 +11,8 @@ AI 해설은 TextCompletion 구현이 있어야 동작한다:
 from __future__ import annotations
 
 import base64
+import csv
+import io
 import os
 import secrets
 import uuid
@@ -265,6 +267,13 @@ class AssetRequest(BaseModel):
     # portfolio_rules.md P-3 초우량 예외(단일종목 20%→30%). 임의 적용 금지 —
     # 반드시 사유 문장과 함께 설정한다.
     exceptional_quality_reason: str | None = None
+
+
+class BulkImportAssetsRequest(BaseModel):
+    """CSV 텍스트로 여러 종목을 한 번에 등록. 헤더: asset_id,name,asset_class,currency,
+    country,sector,yahoo_symbol,exceptional_quality_reason (뒤 3개는 선택)."""
+
+    csv_text: str
 
 
 class TriggerRequest(BaseModel):
@@ -905,6 +914,75 @@ def create_app(
             reason="웹 종목 추가",
         )
         return {"asset_id": asset.asset_id}
+
+    @app.post("/api/assets/bulk-import")
+    def bulk_import_assets(request: BulkImportAssetsRequest) -> dict[str, Any]:
+        """보유 종목이 많을 때 하나씩 등록하지 않아도 되도록 CSV로 일괄 등록한다.
+        한 행이 실패해도 나머지 행은 계속 처리한다(부분 실패 허용 — 실패 사유를 행 번호와
+        함께 반환, 이미 등록된 종목이 있다는 이유로 전체를 되돌리지 않는다)."""
+        _require_real_mode()
+        config_dir = dashboard_service.config_dir
+        try:
+            reader = csv.DictReader(io.StringIO(request.csv_text))
+        except csv.Error as error:
+            raise HTTPException(status_code=400, detail=f"CSV 파싱 실패: {error}") from None
+
+        required_columns = {"asset_id", "name", "asset_class", "currency", "country"}
+        header = set(reader.fieldnames or [])
+        missing_columns = required_columns - header
+        if missing_columns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"CSV 헤더에 필수 열이 없다: {', '.join(sorted(missing_columns))}",
+            )
+
+        created: list[str] = []
+        errors: list[dict[str, Any]] = []
+        for row_number, row in enumerate(reader, start=2):  # 1행은 헤더이므로 데이터는 2행부터
+            asset_id = (row.get("asset_id") or "").strip()
+            try:
+                if not asset_id:
+                    raise ValueError("asset_id가 비어 있다")
+                sector = (row.get("sector") or "").strip() or None
+                yahoo_symbol = (row.get("yahoo_symbol") or "").strip() or None
+                exceptional_reason = (row.get("exceptional_quality_reason") or "").strip() or None
+                asset_req = AssetRequest(
+                    asset_id=asset_id,
+                    name=(row.get("name") or "").strip(),
+                    asset_class=(row.get("asset_class") or "").strip(),
+                    currency=(row.get("currency") or "").strip(),
+                    country=(row.get("country") or "").strip(),
+                    sector=sector,
+                    yahoo_symbol=yahoo_symbol,
+                    exceptional_quality_reason=exceptional_reason,
+                )
+                asset = _build_asset(asset_id, asset_req)
+                append_asset(config_dir / "assets" / "default.yaml", asset)
+                if yahoo_symbol:
+                    upsert_price_symbol(
+                        config_dir / "market" / "symbols.yaml", asset_id, yahoo_symbol
+                    )
+                created.append(asset.asset_id)
+            except HTTPException as error:
+                errors.append(
+                    {"row": row_number, "asset_id": asset_id, "reason": str(error.detail)}
+                )
+            except (ValueError, AssetConfigError) as error:
+                errors.append({"row": row_number, "asset_id": asset_id, "reason": str(error)})
+
+        if created:
+            record_audit(
+                actor="user",
+                action="asset.bulk_imported",
+                detail=f"CSV 일괄 등록: {len(created)}건 성공, {len(errors)}건 실패",
+                reason="웹 CSV 업로드",
+            )
+        return {
+            "created": created,
+            "created_count": len(created),
+            "errors": errors,
+            "error_count": len(errors),
+        }
 
     @app.put("/api/assets/{asset_id}")
     def edit_asset(asset_id: str, request: AssetRequest) -> dict[str, Any]:

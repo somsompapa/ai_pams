@@ -176,3 +176,25 @@ class TestSecEdgarFinancialStatementProvider:
         provider = self.make(lambda _r: httpx.Response(200, json=_TICKERS_BODY))
         with pytest.raises(FinancialStatementProviderError, match="CIK"):
             provider.annual_financials("NOPE")
+
+    def test_shares_outstanding_extracted_for_dcf_auto_fetch(self) -> None:
+        """종목 심볼만 입력해도 주당 적정가를 계산할 수 있도록 발행주식수도
+        재무제표 조회에서 함께 채운다(shares 단위 us-gaap 태그)."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "company_tickers" in str(request.url):
+                return httpx.Response(200, json=_TICKERS_BODY)
+            facts = {
+                "facts": {
+                    "us-gaap": {
+                        "CommonStockSharesOutstanding": {
+                            "units": {"shares": [_fact_entry(2025, "2025-12-31", 15_000_000_000.0)]}
+                        },
+                    }
+                }
+            }
+            return httpx.Response(200, json=facts)
+
+        provider = self.make(handler)
+        result = provider.annual_financials("AAPL", years=1)
+        assert result.annual[0].shares_outstanding == Decimal("15000000000.0")

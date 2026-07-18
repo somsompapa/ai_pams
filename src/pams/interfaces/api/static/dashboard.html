@@ -94,7 +94,8 @@
   main.tab-analysis section[data-tab="analysis"],
   main.tab-equity section[data-tab="equity"],
   main.tab-market-regime section[data-tab="market-regime"],
-  main.tab-journal section[data-tab="journal"] { display: block; }
+  main.tab-journal section[data-tab="journal"],
+  main.tab-guide section[data-tab="guide"] { display: block; }
   .card.hero { border-color: color-mix(in srgb, var(--accent, #3b82f6) 40%, var(--line)); }
   .action-row {
     display: flex; align-items: center; gap: 0.7rem; padding: 0.7rem 0.5rem;
@@ -147,6 +148,8 @@
   .alert .sev { flex: none; }
   .empty { color: var(--muted); font-size: 0.85rem; }
   .hint { color: var(--muted); font-size: 0.8rem; background: var(--bg); border-radius: 0.5rem; padding: 0.5rem 0.7rem; margin: 0.4rem 0; }
+  .guide-steps { list-style: none; padding: 0; margin: 0.5rem 0; display: flex; flex-direction: column; gap: 0.6rem; }
+  .guide-steps li { background: var(--bg); border-radius: 0.6rem; padding: 0.6rem 0.8rem; line-height: 1.5; }
   .wide { grid-column: 1 / -1; }
   .ai-controls { display: flex; gap: 0.5rem; margin-bottom: 0.7rem; }
   select, input, textarea, form button {
@@ -190,6 +193,7 @@
 
 <nav id="tabs" hidden>
   <button type="button" class="tab-btn active" data-tab="today">오늘의 액션</button>
+  <button type="button" class="tab-btn" data-tab="guide">📖 가이드</button>
   <button type="button" class="tab-btn" data-tab="portfolio">포트폴리오</button>
   <button type="button" class="tab-btn" data-tab="txlog">거래내역</button>
   <button type="button" class="tab-btn" data-tab="manage">관리</button>
@@ -200,6 +204,35 @@
 </nav>
 
 <main id="main" hidden>
+  <section class="card wide" data-tab="guide">
+    <h2>📖 시작하기 — 사용 순서</h2>
+    <p class="empty" style="margin-top:0">처음이라면 위에서 아래로 순서대로 따라 하면 된다. 이미 익숙하다면 필요한 탭으로 바로 이동해도 된다.</p>
+    <ol class="guide-steps">
+      <li><b>① 관리 → 자산 등록</b> — 보유 중인 국내주식·미국주식·ETF·현금 등을 하나씩 등록한다. 종목명·통화·국가만 있으면 된다.</li>
+      <li><b>② 거래내역 → 매수/매도 입력</b> — 실제 거래한 내역을 입력하면 보유수량·평균단가가 자동 계산된다.</li>
+      <li><b>③ 관리 → 시세 자동수집</b> — 버튼 한 번으로 등록된 종목의 현재가·환율을 한꺼번에 갱신한다.</li>
+      <li><b>④ 종목분석</b> — 사고 싶은 종목의 심볼(예: AAPL, 005930)만 입력하고 "점수 계산"을 누르면 재무제표·현재가·발행주식수·ROE·부채비율까지 전부 자동 조회해 100점 만점 점수와 DCF 적정가를 계산해준다. 시장점유율·진입장벽처럼 계산으로 나올 수 없는 항목만 직접 입력하면 된다.</li>
+      <li><b>⑤ 매매판정</b> — 시장 국면(VIX 등)은 자동 조회되고, 종목분석에서 계산한 점수·DCF 괴리율은 자동으로 채워진다. 투자 논리 한 문장만 적으면 매수 조건 충족 여부를 판정해준다. 보유 종목은 매도 검토 신호도 여기서 확인한다.</li>
+      <li><b>⑥ 분석</b> — 리밸런싱 제안, 집중도·현금비중 위반 등 규정준수 알림을 확인한다.</li>
+      <li><b>⑦ 일지·AI</b> — 매수/매도 결정과 근거를 기록해 나중에 복기한다.</li>
+    </ol>
+    <h3>용어가 어렵다면</h3>
+    <table>
+      <thead><tr><th>용어</th><th>쉬운 설명</th></tr></thead>
+      <tbody>
+        <tr><td>DCF</td><td>미래에 벌어들일 현금을 오늘 가치로 환산해 "적정 주가"를 추정하는 방법</td></tr>
+        <tr><td>WACC</td><td>회사가 자금을 조달하는 데 드는 평균 비용(%). 보통 8~10% 근처 — 잘 모르면 기본값을 그대로 쓰면 된다</td></tr>
+        <tr><td>영구성장률(g)</td><td>예측기간 이후 회사가 영원히 성장한다고 가정하는 비율. 보통 물가상승률과 비슷한 2~3%</td></tr>
+        <tr><td>괴리율</td><td>(현재가 − 적정가) ÷ 적정가. 음수(-)면 저평가(싸다), 양수(+)면 고평가(비싸다)</td></tr>
+        <tr><td>PER / PBR</td><td>주가가 순이익/순자산의 몇 배인지. 낮을수록 상대적으로 싸다는 뜻(업종마다 적정 수준이 다름)</td></tr>
+        <tr><td>PEG</td><td>PER을 이익성장률로 나눈 값. 1 이하면 성장성 대비 저평가로 보는 경우가 많다</td></tr>
+        <tr><td>ROE / ROIC</td><td>투입한 자기자본/투자자본 대비 얼마나 벌었는지(%). 높을수록 수익성이 좋다</td></tr>
+        <tr><td>부채비율</td><td>총부채 ÷ 자기자본. 100% 이하면 대체로 안전한 편</td></tr>
+        <tr><td>데이터 누락</td><td>값을 추정하지 않고 0점 처리했다는 뜻. 직접 입력하면 점수에 반영된다</td></tr>
+      </tbody>
+    </table>
+  </section>
+
   <section class="card wide" data-tab="today">
     <h2>요약</h2>
     <div class="kpis">
@@ -401,9 +434,10 @@
   <section class="card wide" data-tab="equity">
     <h2>종목 100점 스코어링 + DCF (company_analysis_rules.md 3장)</h2>
     <p class="empty" style="margin-top:0">
-      재무제표(매출/EPS/총자산 CAGR·FCF흑자연도)는 SEC(미국)·DART(한국)에서 자동 조회한다.
-      시장점유율 추이·진입장벽·WACC 근거처럼 계산으로 나오지 않는 항목은 직접 입력해야
-      한다 — 값을 임의로 채우지 않고, 비워두면 해당 항목은 0점+"데이터 누락"으로 처리된다.
+      💡 종목 심볼만 입력하고 바로 계산해도 된다 — 재무제표(매출/EPS/총자산 CAGR·FCF흑자연도·
+      ROE·부채비율)와 현재가·발행주식수는 자동 조회한다. 시장점유율 추이·진입장벽·WACC 근거처럼
+      계산으로 나오지 않는 항목만 직접 입력한다 — 값을 임의로 채우지 않고, 비워두면 해당
+      항목은 0점+"데이터 누락"으로 처리된다.
     </p>
     <form id="eq-form">
       <div class="grid2">
@@ -1435,6 +1469,12 @@ function renderEquityScore(body) {
       "직접 입력하면 점수에 반영됩니다.</p>"
     : "";
 
+  const md = body.market_data;
+  const autoFetchNote = md && md.fetch_errors && md.fetch_errors.length
+    ? "<p class=\"hint\">💡 자동조회 일부 실패 — " + esc(md.fetch_errors.join(" · ")) +
+      " (직접 입력하면 그 값을 우선 사용합니다)</p>"
+    : "";
+
   let dcfHtml = "<p class=\"empty\">DCF 미산출(기준 FCF 확보 안 됨).</p>";
   if (body.dcf && body.dcf.error) {
     dcfHtml = "<p class=\"empty\">DCF 계산 불가: " + esc(body.dcf.error) + "</p>";
@@ -1452,6 +1492,13 @@ function renderEquityScore(body) {
       "</div>" + zonesNote;
   }
 
+  // 종목 심볼만 입력해도 되도록, 자동조회된 현재가·발행주식수를 입력창에 채워
+  // 보여준다(무엇이 자동으로 채워졌는지 투명하게 — 그대로 두거나 수정 가능).
+  if (md) {
+    if (md.current_price && !el("eq-current-price").value) el("eq-current-price").value = md.current_price;
+    if (md.shares_outstanding && !el("eq-shares").value) el("eq-shares").value = md.shares_outstanding;
+  }
+
   const rv = body.relative_valuation;
   let rvHtml = "";
   if (rv && rv.missing.length < 2) {
@@ -1466,7 +1513,7 @@ function renderEquityScore(body) {
     "<h3>" + esc(score.symbol) + " — 총점 " + esc(score.total_score) + "/100 · " + esc(verdictLabel) + "</h3>" +
     "<p>매수 점수조건(≥80점) 충족: " + (score.buy_score_condition_met ? "예" : "아니오") +
     " · 데이터 품질 플래그: " + esc(flags) + "</p>" +
-    missingNote + dcfHtml + rvHtml + table;
+    autoFetchNote + missingNote + dcfHtml + rvHtml + table;
 
   el("bg-total-score").value = score.total_score;
   const gapRatio = body.dcf && body.dcf.gap ? body.dcf.gap.gap_ratio : "";

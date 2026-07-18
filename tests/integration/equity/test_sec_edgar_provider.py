@@ -177,6 +177,13 @@ class TestSecEdgarFinancialStatementProvider:
         with pytest.raises(FinancialStatementProviderError, match="CIK"):
             provider.annual_financials("NOPE")
 
+    def test_numeric_ticker_raises_with_kr_market_hint(self) -> None:
+        """005930(삼성전자) 같은 숫자 심볼은 SEC 미등록이라 항상 실패한다 — market=KR로
+        조회하라는 힌트를 메시지에 포함해 혼동(SEC/DART 오선택)을 줄인다."""
+        provider = self.make(lambda _r: httpx.Response(200, json=_TICKERS_BODY))
+        with pytest.raises(FinancialStatementProviderError, match="market=KR"):
+            provider.annual_financials("005930")
+
     def test_shares_outstanding_extracted_for_dcf_auto_fetch(self) -> None:
         """종목 심볼만 입력해도 주당 적정가를 계산할 수 있도록 발행주식수도
         재무제표 조회에서 함께 채운다(shares 단위 us-gaap 태그)."""

@@ -1270,22 +1270,29 @@ def create_app(
                         if dcf_report.result.fair_value_per_share is not None
                         else None
                     ),
+                    # 발행주식수가 없어도 기업가치·자기자본가치는 유효하게 계산되므로
+                    # 항상 보여준다(trigger_zones 실패가 이 값들까지 지우지 않는다).
                     "enterprise_value": _money_str(dcf_report.result.enterprise_value),
                     "equity_value": _money_str(dcf_report.result.equity_value),
                     "sensitivity_grid": {
                         k: (_money_str(v) if v is not None else None)
                         for k, v in dcf_report.sensitivity.items()
                     },
-                    "trigger_zones": {
-                        "buy_high_confidence_upper": _money_str(
-                            dcf_report.zones.buy_high_confidence_upper
-                        ),
-                        "buy_base_case_upper": _money_str(dcf_report.zones.buy_base_case_upper),
-                        "watch_lower": _money_str(dcf_report.zones.watch_lower),
-                        "watch_upper": _money_str(dcf_report.zones.watch_upper),
-                        "sell_25pct_lower": _money_str(dcf_report.zones.sell_25pct_lower),
-                        "sell_50pct_lower": _money_str(dcf_report.zones.sell_50pct_lower),
-                    },
+                    "trigger_zones": (
+                        {
+                            "buy_high_confidence_upper": _money_str(
+                                dcf_report.zones.buy_high_confidence_upper
+                            ),
+                            "buy_base_case_upper": _money_str(dcf_report.zones.buy_base_case_upper),
+                            "watch_lower": _money_str(dcf_report.zones.watch_lower),
+                            "watch_upper": _money_str(dcf_report.zones.watch_upper),
+                            "sell_25pct_lower": _money_str(dcf_report.zones.sell_25pct_lower),
+                            "sell_50pct_lower": _money_str(dcf_report.zones.sell_50pct_lower),
+                        }
+                        if dcf_report.zones is not None
+                        else None
+                    ),
+                    "trigger_zones_unavailable_reason": dcf_report.zones_unavailable_reason,
                     "gap": (
                         {
                             "gap_ratio": str(dcf_report.gap.gap_ratio.quantize(Decimal("0.0001"))),
@@ -1375,10 +1382,16 @@ def create_app(
             wacc_basis=request.wacc_basis,
             op_margin_industry_rank=request.op_margin_industry_rank,
             fcf_positive_years=metrics.fcf_positive_years,
+            # debt_ratio 미입력 시 자동조회된 재무제표(total_debt/total_equity)에서
+            # 계산한 값을 쓴다(roe와 동일한 자동조회 우선순위 원칙).
             debt_ratio=(
                 None
                 if request.is_financial
-                else _optional_decimal("debt_ratio", request.debt_ratio)
+                else (
+                    _optional_decimal("debt_ratio", request.debt_ratio)
+                    if request.debt_ratio is not None
+                    else metrics.debt_ratio_latest
+                )
             ),
             dcf_valuation_score=dcf_score,
             relative_valuation_score=relative_valuation_input_score,
@@ -1407,6 +1420,7 @@ def create_app(
                 "roa_latest": _ratio_str(metrics.roa_latest),
                 "gross_margin_latest": _ratio_str(metrics.gross_margin_latest),
                 "roe_latest": _ratio_str(metrics.roe_latest),
+                "debt_ratio_latest": _ratio_str(metrics.debt_ratio_latest),
             },
             "dcf": dcf_payload,
             "relative_valuation": {

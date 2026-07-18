@@ -77,3 +77,61 @@ class TestYahooQuoteProvider:
         provider = self.make(lambda _r: httpx.Response(500))
         with pytest.raises(MarketDataProviderError):
             provider.latest_quote("X")
+
+
+def _chart_series_response(currency: str, points: list[tuple[int, float | None]]) -> dict:
+    return {
+        "chart": {
+            "result": [
+                {
+                    "meta": {"currency": currency},
+                    "timestamp": [epoch for epoch, _ in points],
+                    "indicators": {"quote": [{"close": [close for _, close in points]}]},
+                }
+            ],
+            "error": None,
+        }
+    }
+
+
+class TestHistoricalQuotes:
+    """PER/PBR 5년밴드 계산 전용 — historical_quotes()는 조회 실패해도 예외를
+    던지지 않는다(빈 튜플)는 계약이 핵심이다."""
+
+    def make(self, handler) -> YahooQuoteProvider:  # type: ignore[no-untyped-def]
+        return YahooQuoteProvider(transport=httpx.MockTransport(handler))
+
+    def test_parses_monthly_series(self) -> None:
+        provider = self.make(
+            lambda _r: httpx.Response(
+                200,
+                json=_chart_series_response("KRW", [(1672444800, 60000.0), (1704067200, 65000.0)]),
+            )
+        )
+        points = provider.historical_quotes("005930.KS", years=5)
+        assert len(points) == 2
+        assert points[0].close == Decimal("60000.0")
+        assert points[0].currency is Currency.KRW
+
+    def test_skips_null_close_entries(self) -> None:
+        """일부 구간은 거래정지 등으로 close가 null일 수 있다 — 임의로 채우지 않고 건너뛴다."""
+        provider = self.make(
+            lambda _r: httpx.Response(
+                200,
+                json=_chart_series_response(
+                    "USD", [(1672444800, 100.0), (1675123200, None), (1704067200, 110.0)]
+                ),
+            )
+        )
+        points = provider.historical_quotes("X", years=5)
+        assert len(points) == 2
+
+    def test_http_error_returns_empty_tuple_not_raises(self) -> None:
+        provider = self.make(lambda _r: httpx.Response(500))
+        assert provider.historical_quotes("X", years=5) == ()
+
+    def test_unknown_symbol_returns_empty_tuple(self) -> None:
+        provider = self.make(
+            lambda _r: httpx.Response(404, json={"chart": {"result": None, "error": {}}})
+        )
+        assert provider.historical_quotes("NOPE", years=5) == ()

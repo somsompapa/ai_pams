@@ -545,10 +545,10 @@
       </details>
 
       <details class="sub-form">
-        <summary>＋ 상대지표(PER/PBR/PEG) — PEG는 자동 계산, PER/PBR 밴드는 직접 입력</summary>
+        <summary>＋ 상대지표(PER/PBR/PEG) — 선택 항목만 직접 입력(모두 자동 계산 시도)</summary>
         <div class="grid2">
-          <input id="eq-per-pct" placeholder="PER 5년밴드 백분위(%, 0=최하단~100=최상단) — 직접 조사 필요">
-          <input id="eq-pbr-pct" placeholder="PBR 5년밴드 백분위(%, 0=최하단~100=최상단) — 직접 조사 필요">
+          <input id="eq-per-pct" placeholder="PER 5년밴드 백분위(%, 0=최하단~100=최상단) — 비워두면 과거 결산연도별 가격으로 자동 계산">
+          <input id="eq-pbr-pct" placeholder="PBR 5년밴드 백분위(%, 0=최하단~100=최상단) — 비워두면 과거 결산연도별 가격으로 자동 계산">
           <input id="eq-peg" placeholder="PEG (=PER÷EPS성장률%) — 비워두면 현재가·EPS·EPS 3Y CAGR로 자동 계산">
         </div>
       </details>
@@ -1689,6 +1689,12 @@ function renderEquityScore(body) {
 
   const rv = body.relative_valuation;
   if (rv && rv.peg_used && !el("eq-peg").value) el("eq-peg").value = rv.peg_used;
+  if (rv && rv.per_band_percentile_used !== null && rv.per_band_percentile_used !== undefined && !el("eq-per-pct").value) {
+    el("eq-per-pct").value = String(Number(rv.per_band_percentile_used) * 100);
+  }
+  if (rv && rv.pbr_band_percentile_used !== null && rv.pbr_band_percentile_used !== undefined && !el("eq-pbr-pct").value) {
+    el("eq-pbr-pct").value = String(Number(rv.pbr_band_percentile_used) * 100);
+  }
   let rvHtml = "";
   if (rv && (rv.missing.length < 2 || rv.peg_used)) {
     rvHtml = "<p>상대지표(PER/PBR/PEG): " + esc(rv.score) + "/10" +

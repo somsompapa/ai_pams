@@ -640,6 +640,7 @@
         <input id="bg-total-score" placeholder="기업 점수 (0~100)" required>
         <input id="bg-dcf-gap" placeholder="DCF 괴리율 (예: -0.15 = -15%)">
       </div>
+      <input id="bg-relative-score" placeholder="상대지표(PER/PBR/PEG) 점수 (0~10, 종목분석에서 자동 채움 — DCF와 상반되면 경고 표시)">
       <select id="bg-market-grade">
         <option value="">시장 등급 — 선택 안 함(미확보 시 조건2 미충족)</option>
         <option value="A">A</option>
@@ -1696,6 +1697,8 @@ function applyEquityScoreToGates(body) {
     el("bg-dcf-gap").value = gapRatio;
     el("sr-dcf-gap").value = gapRatio;
   }
+  const rv = body.relative_valuation;
+  if (rv && rv.missing.length < 2) el("bg-relative-score").value = rv.score;
 }
 
 el("eq-asset-id").addEventListener("input", () => {
@@ -1858,10 +1861,14 @@ function renderBuyGate(body) {
   const table = "<table><thead><tr><th>조건</th><th>충족 여부</th><th>근거</th></tr></thead><tbody>" +
     rows.map((r) => "<tr>" + r.map((c) => "<td>" + esc(c) + "</td>").join("") + "</tr>").join("") +
     "</tbody></table>";
+  const cautions = body.conditions.filter((c) => c.caution);
+  const cautionHtml = cautions.length
+    ? "<p class=\"empty\">⚠️ " + cautions.map((c) => esc(c.caution)).join(" / ") + "</p>"
+    : "";
   el("bg-output").className = "";
   el("bg-output").innerHTML =
     "<h3>" + (body.all_conditions_met ? "매수 후보 (4개 조건 모두 충족)" : "매수 금지 (미충족 조건 있음)") + "</h3>" +
-    table;
+    table + cautionHtml;
 }
 
 guardSubmit(el("bg-form"), async () => {
@@ -1871,6 +1878,7 @@ guardSubmit(el("bg-form"), async () => {
   const payload = {
     total_score: raw("bg-total-score"),
     dcf_gap_ratio: raw("bg-dcf-gap"),
+    relative_valuation_score: raw("bg-relative-score"),
     market_grade: el("bg-market-grade").value || null,
     investment_thesis: el("bg-thesis").value,
   };

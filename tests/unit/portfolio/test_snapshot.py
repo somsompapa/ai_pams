@@ -247,6 +247,105 @@ class TestMetrics:
         assert snapshot.metrics()["max_exceptional_position_weight"] == Decimal(0)
 
 
+class TestSectorConcentration:
+    """portfolio_rules.md P-4(v1.6.1): 섹터 집중도 35% 한도의 근거 지표."""
+
+    def test_max_sector_weight_combines_same_sector_positions(self) -> None:
+        """삼성전자·애플 둘 다 Information Technology라 같은 섹터로 합산돼야 한다."""
+        snapshot = build_snapshot()
+        total = snapshot.total_value.amount
+        assert snapshot.metrics()["max_sector_weight"] == Decimal("2130000") / total
+
+    def test_max_sector_weight_picks_largest_distinct_sector(self) -> None:
+        healthcare = Asset(
+            asset_id="NYSE:JNJ",
+            name="존슨앤드존슨",
+            asset_class=AssetClass.US_STOCK,
+            currency=Currency.USD,
+            country="US",
+            sector="Health Care",
+        )
+        positions = dict(POSITIONS)
+        positions[healthcare.asset_id] = Position(
+            asset_id=healthcare.asset_id,
+            quantity=Quantity.of(1),
+            cost_basis=Money.of("100", Currency.USD),
+            realized_pnl=Money.zero(Currency.USD),
+        )
+        assets = dict(ASSETS)
+        assets[healthcare.asset_id] = healthcare
+        prices = dict(PRICES)
+        prices[healthcare.asset_id] = Money.of("100", Currency.USD)  # 1×100×1300 = 130,000 KRW
+
+        snapshot = PortfolioValuator().valuate(
+            as_of=AS_OF,
+            base_currency=Currency.KRW,
+            positions=positions,
+            assets=assets,
+            prices=prices,
+            fx_rates=FX,
+            cash_balances=CASH,
+        )
+        total = snapshot.total_value.amount
+        # IT 섹터(삼성 700,000 + 애플 1,430,000 = 2,130,000)가 헬스케어(130,000)보다 크다
+        assert snapshot.metrics()["max_sector_weight"] == Decimal("2130000") / total
+
+    def test_max_sector_weight_excludes_cash_like_and_pension(self) -> None:
+        """현금성·연금 자산은 섹터가 없으므로(또는 있어도) 집중도 지표에서 제외한다
+        — max_position_weight와 동일한 대상 자산군 원칙."""
+        cma = Asset(
+            asset_id="CASH:CMA",
+            name="CMA",
+            asset_class=AssetClass.CASH,
+            currency=Currency.KRW,
+            country="KR",
+        )
+        positions = dict(POSITIONS)
+        positions[cma.asset_id] = Position(
+            asset_id=cma.asset_id,
+            quantity=Quantity.of(1),
+            cost_basis=Money.of("100000000", Currency.KRW),
+            realized_pnl=Money.zero(Currency.KRW),
+        )
+        assets = dict(ASSETS)
+        assets[cma.asset_id] = cma
+        prices = dict(PRICES)
+        prices[cma.asset_id] = Money.of("100000000", Currency.KRW)
+
+        snapshot = PortfolioValuator().valuate(
+            as_of=AS_OF,
+            base_currency=Currency.KRW,
+            positions=positions,
+            assets=assets,
+            prices=prices,
+            fx_rates=FX,
+            cash_balances=CASH,
+        )
+        total = snapshot.total_value.amount
+        # CMA(1억)가 IT섹터(2,130,000)보다 훨씬 크지만 현금성이라 제외돼야 한다
+        assert snapshot.metrics()["max_sector_weight"] == Decimal("2130000") / total
+
+    def test_no_positions_yields_zero_sector_metric(self) -> None:
+        positions = {
+            SAMSUNG.asset_id: Position(
+                asset_id=SAMSUNG.asset_id,
+                quantity=Quantity.of(0),
+                cost_basis=Money.zero(Currency.KRW),
+                realized_pnl=Money.zero(Currency.KRW),
+            )
+        }
+        snapshot = PortfolioValuator().valuate(
+            as_of=AS_OF,
+            base_currency=Currency.KRW,
+            positions=positions,
+            assets=ASSETS,
+            prices={},
+            fx_rates={},
+            cash_balances={Currency.KRW: Money.of("750000", Currency.KRW)},
+        )
+        assert snapshot.metrics()["max_sector_weight"] == Decimal(0)
+
+
 class TestMissingData:
     def test_missing_price_raises(self) -> None:
         with pytest.raises(MissingMarketDataError, match="NASDAQ:AAPL"):

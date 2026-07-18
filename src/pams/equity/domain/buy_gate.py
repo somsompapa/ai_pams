@@ -16,6 +16,10 @@ class BuyGateCondition:
     condition: str
     met: bool
     detail: str
+    # v1.6.1: DCF는 조건3을 충족해도 상대지표(PER/PBR/PEG)가 정반대 신호(richly-valued)를
+    # 주면, 조건 자체는 통과시키되(AND 게이트를 막지 않음) 그 불일치를 여기 남긴다 —
+    # valuation_rules.md V-2 "DCF와 상대지표가 상반되면 불일치를 명시" 요건.
+    caution: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +45,7 @@ def evaluate_buy_gate(
     price_discount_condition_met: bool,
     price_discount_detail: str,
     investment_thesis: str,
+    price_discount_caution: str | None = None,
 ) -> BuyGateResult:
     """buy_rules.md B-1의 4개 AND 조건을 평가한다.
 
@@ -65,6 +70,7 @@ def evaluate_buy_gate(
                 condition="DCF 적정가 대비 -10% 이상 할인",
                 met=price_discount_condition_met,
                 detail=price_discount_detail,
+                caution=price_discount_caution,
             ),
             BuyGateCondition(
                 condition="투자 논리 1문장 이상 명문화",

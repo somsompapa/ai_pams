@@ -169,11 +169,22 @@ class PortfolioSnapshot:
             (v.market_value_base.amount for v in self.valuations if v.asset.is_exceptional_quality),
             default=Decimal(0),
         )
+        # portfolio_rules.md P-4(v1.6.1): 섹터 집중도도 개별 종목과 같은 기준(현금성·
+        # 연금·저축 제외)으로 계산한다 — 예수금이 "섹터"로 취급되면 안 되고, 이미
+        # max_position_weight가 쓰는 것과 동일한 대상 자산군이어야 두 지표가 일관된다.
+        sector_values: dict[str, Decimal] = {}
+        for v in self.valuations:
+            if v.asset.asset_class.is_diversification_exempt:
+                continue
+            key = v.asset.sector or "UNCLASSIFIED"
+            sector_values[key] = sector_values.get(key, Decimal(0)) + v.market_value_base.amount
+        max_sector = max(sector_values.values(), default=Decimal(0))
         return {
             "equity_weight": equity / total,
             "cash_weight": cash_like / total,
             "max_position_weight": max_position / total,
             "max_exceptional_position_weight": max_exceptional_position / total,
+            "max_sector_weight": max_sector / total,
         }
 
 

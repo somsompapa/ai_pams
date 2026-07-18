@@ -14,6 +14,8 @@
 #   max_exceptional_position_weight    초우량 예외 종목(Asset.exceptional_quality_reason
 #                                       설정분)만의 최대 비중 — 사유 없이는 예외 인정 안 됨
 #                                       (비율, 0~1; portfolio_rules.md P-3)
+#   max_sector_weight                  최대 단일 섹터 비중, 현금성·연금·저축 제외
+#                                       (비율, 0~1; portfolio_rules.md P-4, v1.6.1 신규)
 #   drawdown                           현재 낙폭 (비율, 0~1; 고점 대비 하락폭)
 #   vix                                VIX 지수 레벨
 #
@@ -68,6 +70,20 @@ rules:
       action: diversify_position
       params:
         max_weight: "0.30"
+
+  - id: max-sector-weight
+    description: >-
+      단일 섹터 비중은 35%를 초과할 수 없다 (portfolio_rules.md P-4, v1.6.1 신규 —
+      임계값은 초기값이며 분기별 재검토 대상)
+    severity: violation
+    when:
+      - metric: max_sector_weight
+        operator: gt
+        value: "0.35"
+    then:
+      action: diversify_sector
+      params:
+        max_weight: "0.35"
 
   - id: vix-emergency-rebalance
     description: VIX가 35를 넘으면 긴급 리밸런싱 후보로 검토한다

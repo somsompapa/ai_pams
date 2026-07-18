@@ -530,10 +530,10 @@
       </details>
 
       <details class="sub-form">
-        <summary>＋ 재무 — ROE·부채비율은 자동 계산(선택 항목만 직접 입력)</summary>
+        <summary>＋ 재무 — ROE·ROIC·부채비율은 자동 계산(선택 항목만 직접 입력)</summary>
         <div class="grid2">
           <input id="eq-roe" placeholder="ROE (%) — 비워두면 재무제표에서 자동 계산">
-          <input id="eq-roic" placeholder="ROIC (%, WACC와 비교)">
+          <input id="eq-roic" placeholder="ROIC (%, WACC와 비교) — 비워두면 재무제표에서 자동 계산">
           <select id="eq-op-margin-rank">
             <option value="">영업이익률 업종 순위 — 선택 안 함(직접 조사 필요)</option>
             <option value="top30">업종 상위30%</option>
@@ -545,11 +545,11 @@
       </details>
 
       <details class="sub-form">
-        <summary>＋ 상대지표(PER/PBR/PEG) — 선택, DCF 교차검증 보조</summary>
+        <summary>＋ 상대지표(PER/PBR/PEG) — PEG는 자동 계산, PER/PBR 밴드는 직접 입력</summary>
         <div class="grid2">
-          <input id="eq-per-pct" placeholder="PER 5년밴드 백분위(%, 0=최하단~100=최상단)">
-          <input id="eq-pbr-pct" placeholder="PBR 5년밴드 백분위(%, 0=최하단~100=최상단)">
-          <input id="eq-peg" placeholder="PEG (=PER÷EPS성장률%, 예: 0.8)">
+          <input id="eq-per-pct" placeholder="PER 5년밴드 백분위(%, 0=최하단~100=최상단) — 직접 조사 필요">
+          <input id="eq-pbr-pct" placeholder="PBR 5년밴드 백분위(%, 0=최하단~100=최상단) — 직접 조사 필요">
+          <input id="eq-peg" placeholder="PEG (=PER÷EPS성장률%) — 비워두면 현재가·EPS·EPS 3Y CAGR로 자동 계산">
         </div>
       </details>
 
@@ -1655,6 +1655,11 @@ function renderEquityScore(body) {
     if (md.current_price && !el("eq-current-price").value) el("eq-current-price").value = md.current_price;
     if (md.shares_outstanding && !el("eq-shares").value) el("eq-shares").value = md.shares_outstanding;
   }
+  // ROIC도 재무제표에서 자동 계산되면 채워 보여준다(ROE·부채비율과 동일 원칙).
+  const gm = body.growth_metrics;
+  if (gm && gm.roic_latest && !el("eq-roic").value) {
+    el("eq-roic").value = String(Number(gm.roic_latest) * 100);
+  }
   // 순부채(총부채-현금)·예측기간 성장률(과거 매출 CAGR 기준 자동산출)도 동일하게
   // 채워 보여준다 — DCF 계산에 실제로 쓰인 값이므로.
   if (body.dcf && !body.dcf.error) {
@@ -1669,8 +1674,9 @@ function renderEquityScore(body) {
   }
 
   const rv = body.relative_valuation;
+  if (rv && rv.peg_used && !el("eq-peg").value) el("eq-peg").value = rv.peg_used;
   let rvHtml = "";
-  if (rv && rv.missing.length < 2) {
+  if (rv && (rv.missing.length < 2 || rv.peg_used)) {
     rvHtml = "<p>상대지표(PER/PBR/PEG): " + esc(rv.score) + "/10" +
       (rv.missing.length ? " · 누락: " + esc(rv.missing.join(", ")) : "") + "</p>";
   }

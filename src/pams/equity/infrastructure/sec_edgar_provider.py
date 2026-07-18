@@ -62,6 +62,8 @@ _TAG_CANDIDATES: dict[str, tuple[str, ...]] = {
     "operating_cash_flow": ("NetCashProvidedByUsedInOperatingActivities",),
     "capex": ("PaymentsToAcquirePropertyPlantAndEquipment",),
     "shares_outstanding": ("CommonStockSharesOutstanding", "CommonStockSharesIssued"),
+    # ROIC 유효세율 계산 전용(income_tax_expense÷(net_income+income_tax_expense)).
+    "income_tax_expense": ("IncomeTaxExpenseBenefit",),
 }
 _UNIT_OVERRIDES: dict[str, str] = {"eps": "USD/shares", "shares_outstanding": "shares"}
 
@@ -216,6 +218,7 @@ class SecEdgarFinancialStatementProvider:
                     operating_cash_flow=extracted["operating_cash_flow"].get(fy),
                     capex=extracted["capex"].get(fy),
                     shares_outstanding=extracted["shares_outstanding"].get(fy),
+                    income_tax_expense=extracted["income_tax_expense"].get(fy),
                 )
             )
         return AnnualFinancialsResult(

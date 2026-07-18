@@ -1500,6 +1500,27 @@ def create_app(
         except ScoringConfigError as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
 
+        # PEG(=PER÷EPS성장률%)는 현재가·최근연도 EPS·EPS 3Y CAGR이 이미 조회·계산돼
+        # 있으면 새 데이터 없이도 산출 가능하다(항등식 기반 — 임의추정 아님). PER/PBR
+        # 5년밴드 백분위는 5년치 가격이력이 별도로 필요해 여기서는 자동화하지 않는다.
+        peg = _optional_decimal("peg", request.peg)
+        if peg is None:
+            latest_eps = annual[-1].eps if annual else None
+            if (
+                current_price is not None
+                and latest_eps is not None
+                and latest_eps > 0
+                and metrics.eps_cagr_3y is not None
+                and metrics.eps_cagr_3y > 0
+            ):
+                implied_per = current_price / latest_eps
+                peg = implied_per / (metrics.eps_cagr_3y * 100)
+            else:
+                market_data_fetch_errors.append(
+                    "PEG 자동계산 실패(현재가·최근연도 EPS·EPS 3Y CAGR 중 일부 미확보 "
+                    "또는 0 이하) — 직접 입력하면 반영된다"
+                )
+
         relative_valuation = CalculateRelativeValuation(
             config=scoring_config.relative_valuation
         ).execute(
@@ -1509,15 +1530,15 @@ def create_app(
             pbr_band_percentile=_optional_decimal(
                 "pbr_band_percentile", request.pbr_band_percentile
             ),
-            peg=_optional_decimal("peg", request.peg),
+            peg=peg,
         )
-        # 세 입력이 전부 미제공이면 "0점짜리 상대지표"가 아니라 DCF와 동일하게
-        # 미산출로 처리한다(데이터 누락을 숨기지 않는다 — score_valuation()의 _missing()).
+        # 세 입력이 전부 미제공(자동산출된 peg도 없음)이면 "0점짜리 상대지표"가 아니라
+        # DCF와 동일하게 미산출로 처리한다(데이터 누락을 숨기지 않는다).
         relative_valuation_input_score = (
             None
             if request.per_band_percentile is None
             and request.pbr_band_percentile is None
-            and request.peg is None
+            and peg is None
             else relative_valuation.score
         )
 
@@ -1554,7 +1575,13 @@ def create_app(
                 if request.roe is not None
                 else metrics.roe_latest
             ),
-            roic=_optional_decimal("roic", request.roic),
+            # roic 미입력 시 자동조회된 재무제표에서 계산한 값을 쓴다(roe·debt_ratio와
+            # 동일한 자동조회 우선순위 원칙).
+            roic=(
+                _optional_decimal("roic", request.roic)
+                if request.roic is not None
+                else metrics.roic_latest
+            ),
             wacc_estimate=_optional_decimal("wacc", request.wacc),
             wacc_basis=request.wacc_basis,
             op_margin_industry_rank=request.op_margin_industry_rank,
@@ -1605,6 +1632,7 @@ def create_app(
                 "gross_margin_latest": _ratio_str(metrics.gross_margin_latest),
                 "roe_latest": _ratio_str(metrics.roe_latest),
                 "debt_ratio_latest": _ratio_str(metrics.debt_ratio_latest),
+                "roic_latest": _ratio_str(metrics.roic_latest),
             },
             "dcf": dcf_payload,
             "relative_valuation": {
@@ -1622,6 +1650,9 @@ def create_app(
                 "peg_adjustment": str(relative_valuation.peg_adjustment),
                 "missing": list(relative_valuation.missing),
                 "note": relative_valuation.note,
+                # peg가 자동산출된 경우 입력창에 그대로 채워 보여준다(net_debt_used와
+                # 동일한 투명성 원칙).
+                "peg_used": str(peg.quantize(Decimal("0.01"))) if peg is not None else None,
             },
         }
 

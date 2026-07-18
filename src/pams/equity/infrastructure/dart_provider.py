@@ -85,6 +85,8 @@ _ACCOUNT_MAP: dict[str, tuple[str, ...]] = {
         "영업활동으로인한순현금흐름",
     ),
     "capex": ("유형자산의취득",),
+    # ROIC 유효세율 계산 전용(income_tax_expense÷(net_income+income_tax_expense)).
+    "income_tax_expense": ("법인세비용", "법인세비용(수익)"),
 }
 
 
@@ -286,6 +288,7 @@ class DartFinancialStatementProvider:
                     operating_cash_flow=values["operating_cash_flow"],
                     capex=values["capex"],
                     shares_outstanding=shares_outstanding,
+                    income_tax_expense=values["income_tax_expense"],
                 )
             )
         return AnnualFinancialsResult(

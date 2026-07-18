@@ -44,6 +44,13 @@ class TestLoadDefaultConfig:
         assert "max-exceptional-position" in by_id
         assert by_id["max-exceptional-position"].severity is Severity.VIOLATION
 
+    def test_sector_concentration_rule_loaded(self) -> None:
+        """portfolio_rules.md P-4(v1.6.1) 섹터 집중도 35% 한도 규칙."""
+        policy = YamlPolicyRepository(ips_path=IPS_PATH, rules_path=RULES_PATH).load()
+        by_id = {rule.rule_id: rule for rule in policy.rules}
+        assert "max-sector-weight" in by_id
+        assert by_id["max-sector-weight"].severity is Severity.VIOLATION
+
 
 class TestParseErrors:
     def write(self, path: Path, content: str) -> Path:

@@ -45,3 +45,24 @@ class TestEachConditionCanBlockAlone:
         """공백만 있는 논지는 명문화된 것으로 보지 않는다."""
         result = evaluate_buy_gate(**{**_ALL_MET, "investment_thesis": "   \n  "})
         assert result.all_conditions_met is False
+
+
+class TestPriceDiscountCaution:
+    """v1.6.1: DCF·상대지표가 상반될 때 조건3은 통과시키되 불일치를 고지한다
+    (valuation_rules.md V-2)."""
+
+    def test_caution_attached_but_gate_still_passes(self) -> None:
+        result = evaluate_buy_gate(
+            **{**_ALL_MET, "price_discount_caution": "DCF와 상대지표가 상반된다"}
+        )
+        assert result.all_conditions_met is True
+        condition = result.condition_for("DCF 적정가 대비 -10% 이상 할인")
+        assert condition is not None
+        assert condition.met is True
+        assert condition.caution == "DCF와 상대지표가 상반된다"
+
+    def test_no_caution_by_default(self) -> None:
+        result = evaluate_buy_gate(**_ALL_MET)
+        condition = result.condition_for("DCF 적정가 대비 -10% 이상 할인")
+        assert condition is not None
+        assert condition.caution is None

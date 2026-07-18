@@ -225,6 +225,10 @@ class BuyGateRequest(BaseModel):
     dcf_gap_ratio: str | None = None  # /api/equity-score dcf.gap.gap_ratio
     market_grade: Literal["A", "B", "C", "D", "E"] | None = None  # /api/market-regime final_grade
     investment_thesis: str = ""
+    # 상대지표(PER/PBR/PEG, 0~10) — /api/equity-score의 relative_valuation.score.
+    # DCF는 조건3 충족인데 이 값이 낮으면(상단·richly-valued) 그 불일치를 고지한다
+    # (valuation_rules.md V-2, v1.6.1).
+    relative_valuation_score: str | None = None
 
 
 class SellReviewRequest(BaseModel):
@@ -1696,6 +1700,17 @@ def create_app(
         price_met = gap_ratio is not None and gap_ratio <= Decimal("-0.10")
         price_detail = "미확보" if gap_ratio is None else str(gap_ratio.quantize(Decimal("0.0001")))
 
+        # v1.6.1: DCF가 조건3을 충족시켜도 상대지표가 정반대(상단·richly-valued)면
+        # 조건은 그대로 통과시키되(자동 매수 금지 원칙은 어차피 전 조건에 적용됨)
+        # 그 불일치를 고지한다 — 근거 없는 확신을 있는 것처럼 보이지 않게 한다.
+        rel_score = _optional_decimal("relative_valuation_score", request.relative_valuation_score)
+        price_caution = None
+        if price_met and rel_score is not None and rel_score < Decimal("3"):
+            price_caution = (
+                f"DCF는 -10% 이상 할인이나 상대지표(PER/PBR/PEG) 점수가 {rel_score}/10로 낮다 "
+                "— 상대비교로는 저평가 신호가 약하다는 뜻이니 DCF 가정을 재점검하라"
+            )
+
         result = evaluate_buy_gate(
             score_condition_met=score_met,
             score_detail=f"{total_score}점",
@@ -1704,6 +1719,7 @@ def create_app(
             price_discount_condition_met=price_met,
             price_discount_detail=price_detail,
             investment_thesis=request.investment_thesis,
+            price_discount_caution=price_caution,
         )
         record_audit(
             actor="user",
@@ -1714,7 +1730,7 @@ def create_app(
         return {
             "all_conditions_met": result.all_conditions_met,
             "conditions": [
-                {"condition": c.condition, "met": c.met, "detail": c.detail}
+                {"condition": c.condition, "met": c.met, "detail": c.detail, "caution": c.caution}
                 for c in result.conditions
             ],
         }

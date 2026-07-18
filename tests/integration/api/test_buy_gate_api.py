@@ -73,3 +73,44 @@ class TestBuyGateApi:
         client.post("/api/buy-gate", json=_ALL_PASS_PAYLOAD)
         audit_log = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
         assert "buy_gate.evaluated" in audit_log
+
+
+class TestPriceDiscountCaution:
+    """v1.6.1: DCF·상대지표가 상반될 때 조건3은 통과시키되 불일치를 고지한다
+    (valuation_rules.md V-2)."""
+
+    def test_low_relative_score_attaches_caution_but_still_passes(self, tmp_path: Path) -> None:
+        client = _client(tmp_path)
+        response = client.post(
+            "/api/buy-gate",
+            json={**_ALL_PASS_PAYLOAD, "relative_valuation_score": "2"},
+        )
+        body = response.json()
+        assert body["all_conditions_met"] is True
+        price_condition = next(
+            c for c in body["conditions"] if c["condition"] == "DCF 적정가 대비 -10% 이상 할인"
+        )
+        assert price_condition["met"] is True
+        assert price_condition["caution"] is not None
+        assert "상대지표" in price_condition["caution"]
+
+    def test_high_relative_score_no_caution(self, tmp_path: Path) -> None:
+        client = _client(tmp_path)
+        response = client.post(
+            "/api/buy-gate",
+            json={**_ALL_PASS_PAYLOAD, "relative_valuation_score": "8"},
+        )
+        body = response.json()
+        price_condition = next(
+            c for c in body["conditions"] if c["condition"] == "DCF 적정가 대비 -10% 이상 할인"
+        )
+        assert price_condition["caution"] is None
+
+    def test_no_relative_score_no_caution(self, tmp_path: Path) -> None:
+        client = _client(tmp_path)
+        response = client.post("/api/buy-gate", json=_ALL_PASS_PAYLOAD)
+        body = response.json()
+        price_condition = next(
+            c for c in body["conditions"] if c["condition"] == "DCF 적정가 대비 -10% 이상 할인"
+        )
+        assert price_condition["caution"] is None

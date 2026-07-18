@@ -36,6 +36,7 @@ from pams.equity.domain.industry_classification import (
     IndustryPeerComparison,
     compare_industry_peers,
 )
+from pams.equity.domain.liquidity import LiquidityCheck, evaluate_liquidity
 from pams.equity.domain.price_band import PriceBandResult, compute_price_band
 from pams.equity.domain.relative_valuation import (
     RelativeValuationConfig,
@@ -91,6 +92,7 @@ __all__ = [
     "IndustryClassificationProvider",
     "IndustryClassificationRepository",
     "IndustryPeerComparison",
+    "LiquidityCheck",
     "PriceBandResult",
     "PriceTrigger",
     "PriceTriggerPlan",
@@ -120,6 +122,7 @@ __all__ = [
     "compute_price_band",
     "dcf_sensitivity",
     "evaluate_buy_gate",
+    "evaluate_liquidity",
     "evaluate_sell_review",
     "project_fcf",
     "relative_valuation_score",

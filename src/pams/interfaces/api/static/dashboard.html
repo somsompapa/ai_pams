@@ -653,6 +653,22 @@
       <button type="submit">매수 게이트 판정</button>
     </form>
     <div id="bg-output" class="empty">아직 판정 결과가 없다.</div>
+
+    <h3 style="margin-top:1.5rem">유동성 확인 (portfolio_rules.md P-5 — 참고용, 자동 차단 아님)</h3>
+    <p class="empty" style="margin-top:0">
+      최근 20영업일 평균 거래대금이 1차 매수 예정 금액의 20배 미만이면, 그 자체로 매수
+      금지는 아니지만 분할 횟수를 늘리거나 목표 수량을 줄이는 걸 검토하라는 신호다.
+    </p>
+    <form id="liq-form" class="tx-form">
+      <input id="liq-symbol" placeholder="종목 심볼 (예: AAPL, 005930)">
+      <select id="liq-market">
+        <option value="US">미국 (Yahoo)</option>
+        <option value="KR">한국 (Yahoo)</option>
+      </select>
+      <input id="liq-amount" placeholder="1차 매수 예정 금액" required>
+      <button type="submit">유동성 확인</button>
+    </form>
+    <div id="liq-output" class="empty">아직 확인 결과가 없다.</div>
   </section>
 
   <section class="card wide" data-tab="market-regime">
@@ -1920,6 +1936,44 @@ guardSubmit(el("bg-form"), async () => {
   } else {
     el("bg-output").className = "empty";
     el("bg-output").textContent = body.detail ?? ("실패 (" + response.status + ")");
+  }
+});
+
+function renderLiquidityCheck(body) {
+  if (body.sufficient === null) {
+    el("liq-output").className = "empty";
+    el("liq-output").textContent = body.note ?? "판정 불가";
+    return;
+  }
+  el("liq-output").className = "";
+  const label = body.sufficient ? "✅ 유동성 충분" : "⚠️ 유동성 기준 미달 (자동 차단 아님 — 분할 횟수 확대 등 검토)";
+  el("liq-output").innerHTML =
+    "<h3>" + label + "</h3>" +
+    "<p>최근 " + esc(body.days_observed) + "영업일 평균 거래대금: " + esc(body.average_daily_trading_value) +
+    " · 최소 기준(20배): " + esc(body.required_minimum) + "</p>";
+}
+
+guardSubmit(el("liq-form"), async () => {
+  el("liq-output").className = "empty";
+  el("liq-output").innerHTML = loadingHtml("확인 중…");
+
+  const payload = {
+    asset_id: el("liq-symbol").value.trim(),
+    market: el("liq-market").value,
+    planned_first_tranche_amount: el("liq-amount").value.trim(),
+  };
+
+  const response = await fetch("/api/liquidity-check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (response.ok) {
+    renderLiquidityCheck(body);
+  } else {
+    el("liq-output").className = "empty";
+    el("liq-output").textContent = body.detail ?? ("실패 (" + response.status + ")");
   }
 });
 

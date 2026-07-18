@@ -3,6 +3,8 @@
 from pams.market_data.domain.models import ExchangeRate, PricePoint
 from pams.market_data.domain.ports import ExchangeRateProvider, PriceProvider
 from pams.market_data.domain.quote import (
+    DailyBar,
+    DailyVolumeProvider,
     HistoricalQuoteProvider,
     MarketDataProviderError,
     Quote,
@@ -11,6 +13,8 @@ from pams.market_data.domain.quote import (
 )
 
 __all__ = [
+    "DailyBar",
+    "DailyVolumeProvider",
     "ExchangeRate",
     "ExchangeRateProvider",
     "HistoricalQuoteProvider",

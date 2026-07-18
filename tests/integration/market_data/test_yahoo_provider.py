@@ -4,6 +4,7 @@
 요청/응답 파싱 계약만 검증한다.
 """
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import httpx
@@ -135,3 +136,70 @@ class TestHistoricalQuotes:
             lambda _r: httpx.Response(404, json={"chart": {"result": None, "error": {}}})
         )
         assert provider.historical_quotes("NOPE", years=5) == ()
+
+
+def _chart_daily_response(points: list[tuple[int, float | None, int | None]]) -> dict:
+    return {
+        "chart": {
+            "result": [
+                {
+                    "timestamp": [epoch for epoch, _, _ in points],
+                    "indicators": {
+                        "quote": [
+                            {
+                                "close": [close for _, close, _ in points],
+                                "volume": [volume for _, _, volume in points],
+                            }
+                        ]
+                    },
+                }
+            ],
+            "error": None,
+        }
+    }
+
+
+class TestRecentDailyBars:
+    """유동성 스크리닝(P-5, 최근 20영업일 평균 거래대금) 전용."""
+
+    def make(self, handler) -> YahooQuoteProvider:  # type: ignore[no-untyped-def]
+        return YahooQuoteProvider(transport=httpx.MockTransport(handler))
+
+    def test_parses_close_and_volume(self) -> None:
+        provider = self.make(
+            lambda _r: httpx.Response(
+                200,
+                json=_chart_daily_response(
+                    [(1704067200, 100.0, 1_000_000), (1704153600, 105.0, 1_200_000)]
+                ),
+            )
+        )
+        bars = provider.recent_daily_bars("X", days=20)
+        assert len(bars) == 2
+        assert bars[0].close == Decimal("100.0")
+        assert bars[0].volume == 1_000_000
+
+    def test_limits_to_requested_days_keeping_most_recent(self) -> None:
+        points = [(1704067200 + i * 86400, 100.0, 1000) for i in range(30)]
+        provider = self.make(lambda _r: httpx.Response(200, json=_chart_daily_response(points)))
+        bars = provider.recent_daily_bars("X", days=20)
+        assert len(bars) == 20
+        # 마지막(가장 최신) 관측치가 남아야 한다 — 앞쪽(오래된) 10개가 잘려나간다.
+        expected_last_epoch = 1704067200 + 29 * 86400
+        assert bars[-1].quote_date.day == datetime.fromtimestamp(expected_last_epoch, tz=UTC).day
+
+    def test_skips_null_volume_entries(self) -> None:
+        provider = self.make(
+            lambda _r: httpx.Response(
+                200,
+                json=_chart_daily_response(
+                    [(1704067200, 100.0, None), (1704153600, 105.0, 1_000_000)]
+                ),
+            )
+        )
+        bars = provider.recent_daily_bars("X", days=20)
+        assert len(bars) == 1
+
+    def test_http_error_returns_empty_tuple_not_raises(self) -> None:
+        provider = self.make(lambda _r: httpx.Response(500))
+        assert provider.recent_daily_bars("X", days=20) == ()

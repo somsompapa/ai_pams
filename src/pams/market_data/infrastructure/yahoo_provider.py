@@ -15,7 +15,7 @@ from decimal import Decimal, InvalidOperation
 
 import httpx
 
-from pams.market_data.domain import MarketDataProviderError, Quote
+from pams.market_data.domain import DailyBar, MarketDataProviderError, Quote
 from pams.shared_kernel.domain import Currency, DomainValidationError
 
 _BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
@@ -129,3 +129,43 @@ class YahooQuoteProvider:
             except (InvalidOperation, ValueError, OSError, DomainValidationError):
                 continue
         return tuple(points)
+
+    def recent_daily_bars(self, symbol: str, *, days: int = 20) -> tuple[DailyBar, ...]:
+        """유동성 스크리닝(P-5, 최근 20영업일 평균 거래대금) 전용 — 일 단위 종가·
+        거래량 조회. 실패해도 예외를 던지지 않는다(빈 튜플이면 유동성 확인만 생략)."""
+        url = f"{_BASE_URL}/{symbol}"
+        try:
+            with httpx.Client(transport=self.transport, timeout=self.timeout_seconds) as client:
+                response = client.get(
+                    url,
+                    params={"interval": "1d", "range": "2mo"},
+                    headers={"User-Agent": _USER_AGENT},
+                )
+        except httpx.HTTPError:
+            return ()
+        if response.status_code >= 400:
+            return ()
+        try:
+            result = response.json()["chart"]["result"]
+        except (KeyError, TypeError, ValueError):
+            return ()
+        if not result:
+            return ()
+
+        timestamps = result[0].get("timestamp") or []
+        quote_blocks = result[0].get("indicators", {}).get("quote") or [{}]
+        closes = quote_blocks[0].get("close") or []
+        volumes = quote_blocks[0].get("volume") or []
+
+        bars: list[DailyBar] = []
+        for epoch, close, volume in zip(timestamps, closes, volumes, strict=False):
+            if close is None or volume is None:
+                continue
+            try:
+                bar_date = datetime.fromtimestamp(int(epoch), tz=UTC).date()
+                bars.append(
+                    DailyBar(quote_date=bar_date, close=Decimal(str(close)), volume=int(volume))
+                )
+            except (InvalidOperation, ValueError, OSError):
+                continue
+        return tuple(bars[-days:])

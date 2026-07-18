@@ -30,9 +30,11 @@ from pams.equity.domain.financial_statement import (
     AnnualFinancialsResult,
     FinancialStatementProviderError,
 )
+from pams.equity.domain.industry_classification import IndustryClassification
 
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 
 _TAG_CANDIDATES: dict[str, tuple[str, ...]] = {
     "revenue": (
@@ -153,6 +155,27 @@ class SecEdgarFinancialStatementProvider:
             else ""
         )
         raise FinancialStatementProviderError(f"SEC CIK 매핑 실패: ticker={ticker}{hint}")
+
+    def industry_classification(self, asset_id: str) -> IndustryClassification | None:
+        """SEC submissions.json의 sic(Standard Industrial Classification) 코드를
+        그대로 쓴다. 조회 실패·필드 없음이면 조용히 None."""
+        try:
+            cik = self._ticker_to_cik(asset_id)
+        except FinancialStatementProviderError:
+            return None
+        try:
+            with self._client() as client:
+                response = client.get(_SUBMISSIONS_URL.format(cik=cik), headers=self._headers())
+            if response.status_code >= 400:
+                return None
+            data = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        sic = str(data.get("sic") or "").strip()
+        if not sic:
+            return None
+        name = str(data.get("sicDescription") or "").strip() or None
+        return IndustryClassification(code=sic, name=name)
 
     def annual_financials(self, asset_id: str, *, years: int = 4) -> AnnualFinancialsResult:
         cik = self._ticker_to_cik(asset_id)

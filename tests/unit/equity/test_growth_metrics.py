@@ -250,3 +250,23 @@ class TestRoicLatest:
             ),
         )
         assert compute_growth_metrics(annual).roic_latest is None
+
+
+class TestOperatingMarginLatest:
+    """업종평균 대비 영업이익률순위(compare_industry_peers) 산식 전용 입력값."""
+
+    def test_computes_from_latest_year_operating_income_and_revenue(self) -> None:
+        annual = (_row(2025, revenue=Decimal(1000), operating_income=Decimal(150)),)
+        assert compute_growth_metrics(annual).operating_margin_latest == Decimal("0.15")
+
+    def test_none_when_revenue_missing_or_zero(self) -> None:
+        no_revenue = compute_growth_metrics((_row(2025, operating_income=Decimal(150)),))
+        assert no_revenue.operating_margin_latest is None
+        zero_revenue = compute_growth_metrics(
+            (_row(2025, revenue=Decimal(0), operating_income=Decimal(150)),)
+        )
+        assert zero_revenue.operating_margin_latest is None
+
+    def test_none_when_operating_income_missing(self) -> None:
+        annual = (_row(2025, revenue=Decimal(1000)),)
+        assert compute_growth_metrics(annual).operating_margin_latest is None

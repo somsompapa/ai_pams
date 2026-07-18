@@ -514,8 +514,8 @@
             <option value="flat">횡보</option>
             <option value="down">하락</option>
           </select>
-          <input id="eq-gross-margin" placeholder="매출총이익률 업종평균 대비(%p) — 비금융업, 직접 조사">
-          <input id="eq-roa" placeholder="ROA 업종평균 대비(%p) — 금융업, 직접 조사">
+          <input id="eq-gross-margin" placeholder="매출총이익률 업종평균 대비(%p) — 비금융업, sync-industry 실행 시 자동 계산">
+          <input id="eq-roa" placeholder="ROA 업종평균 대비(%p) — 금융업, sync-industry 실행 시 자동 계산">
         </div>
         <div class="grid2">
           <label><input type="checkbox" id="eq-eb-regulatory"> 규제/라이선스 장벽(+2)</label>
@@ -535,7 +535,7 @@
           <input id="eq-roe" placeholder="ROE (%) — 비워두면 재무제표에서 자동 계산">
           <input id="eq-roic" placeholder="ROIC (%, WACC와 비교) — 비워두면 재무제표에서 자동 계산">
           <select id="eq-op-margin-rank">
-            <option value="">영업이익률 업종 순위 — 선택 안 함(직접 조사 필요)</option>
+            <option value="">영업이익률 업종 순위 — 선택 안 함(sync-industry 실행 시 자동 계산)</option>
             <option value="top30">업종 상위30%</option>
             <option value="mid">중위</option>
             <option value="bottom">하위</option>
@@ -1659,6 +1659,20 @@ function renderEquityScore(body) {
   const gm = body.growth_metrics;
   if (gm && gm.roic_latest && !el("eq-roic").value) {
     el("eq-roic").value = String(Number(gm.roic_latest) * 100);
+  }
+  // 업종평균 대비 지표도 피어 비교(sync-industry 사전 실행 필요)로 자동산출되면
+  // 채워 보여준다 — 무엇이 자동으로 채워졌는지 투명하게.
+  const ipc = body.industry_peer_comparison;
+  if (ipc) {
+    if (ipc.gross_margin_vs_industry_pp !== null && !el("eq-gross-margin").value) {
+      el("eq-gross-margin").value = String(Number(ipc.gross_margin_vs_industry_pp) * 100);
+    }
+    if (ipc.roa_vs_industry_pp !== null && !el("eq-roa").value) {
+      el("eq-roa").value = String(Number(ipc.roa_vs_industry_pp) * 100);
+    }
+    if (ipc.op_margin_industry_rank && !el("eq-op-margin-rank").value) {
+      el("eq-op-margin-rank").value = ipc.op_margin_industry_rank;
+    }
   }
   // 순부채(총부채-현금)·예측기간 성장률(과거 매출 CAGR 기준 자동산출)도 동일하게
   // 채워 보여준다 — DCF 계산에 실제로 쓰인 값이므로.

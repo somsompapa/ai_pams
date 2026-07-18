@@ -226,3 +226,41 @@ class TestSecEdgarFinancialStatementProvider:
         provider = self.make(handler)
         result = provider.annual_financials("AAPL", years=1)
         assert result.annual[0].income_tax_expense == Decimal("250000000.0")
+
+    def test_industry_classification_returns_sic_code(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "company_tickers" in url:
+                return httpx.Response(200, json=_TICKERS_BODY)
+            if "submissions" in url:
+                return httpx.Response(
+                    200, json={"sic": "3571", "sicDescription": "Electronic Computers"}
+                )
+            return httpx.Response(404)
+
+        provider = self.make(handler)
+        result = provider.industry_classification("AAPL")
+        assert result is not None
+        assert result.code == "3571"
+        assert result.name == "Electronic Computers"
+
+    def test_industry_classification_none_when_sic_missing(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "company_tickers" in url:
+                return httpx.Response(200, json=_TICKERS_BODY)
+            if "submissions" in url:
+                return httpx.Response(200, json={})
+            return httpx.Response(404)
+
+        provider = self.make(handler)
+        assert provider.industry_classification("AAPL") is None
+
+    def test_industry_classification_none_when_ticker_unknown(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "company_tickers" in str(request.url):
+                return httpx.Response(200, json=_TICKERS_BODY)
+            return httpx.Response(404)
+
+        provider = self.make(handler)
+        assert provider.industry_classification("NOPE") is None

@@ -145,7 +145,12 @@ class SecEdgarFinancialStatementProvider:
         for entry in data.values():
             if str(entry.get("ticker", "")).upper() == ticker.upper():
                 return str(entry["cik_str"]).zfill(10)
-        raise FinancialStatementProviderError(f"SEC CIK 매핑 실패: ticker={ticker}")
+        hint = (
+            " (숫자로만 된 심볼은 SEC 미등록 해외종목일 수 있다 — 예: 한국 종목은 market=KR로 조회)"
+            if ticker.isdigit()
+            else ""
+        )
+        raise FinancialStatementProviderError(f"SEC CIK 매핑 실패: ticker={ticker}{hint}")
 
     def annual_financials(self, asset_id: str, *, years: int = 4) -> AnnualFinancialsResult:
         cik = self._ticker_to_cik(asset_id)

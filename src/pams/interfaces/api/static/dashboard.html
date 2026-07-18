@@ -1681,6 +1681,12 @@ function applyEquityScoreToGates(body) {
   }
 }
 
+el("eq-asset-id").addEventListener("input", () => {
+  const ticker = el("eq-asset-id").value.trim();
+  if (/^\d+$/.test(ticker)) el("eq-market").value = "KR";
+  else if (/^[A-Za-z.]+$/.test(ticker)) el("eq-market").value = "US";
+});
+
 guardSubmit(el("eq-form"), async () => {
   el("eq-output").className = "empty";
   el("eq-output").innerHTML = loadingHtml("조회·계산 중…");

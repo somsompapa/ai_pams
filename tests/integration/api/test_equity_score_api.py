@@ -1,6 +1,7 @@
 """POST /api/equity-score 통합 테스트. 실네트워크 없이 페이크 FinancialStatementProvider 주입."""
 
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -8,6 +9,8 @@ from fastapi.testclient import TestClient
 
 from pams.equity.domain.financial_statement import AnnualFinancials, AnnualFinancialsResult
 from pams.interfaces.api.app import create_app
+from pams.market_data.domain import MarketDataProviderError, Quote, QuoteProvider
+from pams.shared_kernel.domain import Currency
 
 _NON_FINANCIAL_ANNUAL = (
     AnnualFinancials(
@@ -49,8 +52,34 @@ class _FakeProvider:
         return self.result
 
 
-def _client(tmp_path: Path, provider: _FakeProvider, market: str = "US") -> TestClient:
-    app = create_app(data_dir=tmp_path, equity_providers={market: provider})
+@dataclass(frozen=True, slots=True)
+class _FakeQuoteProvider:
+    quotes: dict[str, Quote]
+
+    def latest_quote(self, symbol: str) -> Quote | None:
+        return self.quotes.get(symbol)
+
+
+@dataclass(frozen=True, slots=True)
+class _FailingQuoteProvider:
+    def latest_quote(self, symbol: str) -> Quote | None:
+        raise MarketDataProviderError(f"{symbol}: 요청 실패")
+
+
+def _client(
+    tmp_path: Path,
+    provider: _FakeProvider,
+    market: str = "US",
+    price_provider: QuoteProvider | None = None,
+) -> TestClient:
+    # 실네트워크 호출을 막기 위해 기본값은 항상 실패하는 페이크로 둔다 — current_price가
+    # 요청에 없으면(대부분의 기존 테스트) 자동조회가 시도되므로, 명시적으로 값을 주지
+    # 않는 한 진짜 Yahoo Finance를 호출하면 안 된다.
+    app = create_app(
+        data_dir=tmp_path,
+        equity_providers={market: provider},
+        equity_price_provider=price_provider or _FailingQuoteProvider(),
+    )
     return TestClient(app)
 
 
@@ -248,6 +277,104 @@ class TestEquityScoreApi:
         assert dcf["fair_value_per_share"] is None
         assert dcf["trigger_zones"] is None
         assert dcf["trigger_zones_unavailable_reason"] is not None
+
+    def test_current_price_auto_fetched_when_omitted(self, tmp_path: Path) -> None:
+        """종목 심볼만 입력해도 DCF 괴리율까지 나오도록, current_price 미입력 시
+        시세 공급자에서 자동조회한 값을 쓴다."""
+        provider = _FakeProvider(
+            AnnualFinancialsResult(
+                asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+            )
+        )
+        quote_provider = _FakeQuoteProvider(
+            quotes={
+                "TEST": Quote(
+                    symbol="TEST",
+                    quote_date=date(2026, 7, 18),
+                    close=Decimal("50"),
+                    currency=Currency.USD,
+                )
+            }
+        )
+        client = _client(tmp_path, provider, price_provider=quote_provider)
+        payload = {**_BASE_PAYLOAD, "current_price": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+
+        assert body["market_data"]["current_price"] == "50.00"
+        assert body["market_data"]["fetch_errors"] == []
+        assert body["dcf"]["gap"] is not None
+
+    def test_current_price_fetch_failure_recorded_but_does_not_crash(self, tmp_path: Path) -> None:
+        provider = _FakeProvider(
+            AnnualFinancialsResult(
+                asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+            )
+        )
+        client = _client(tmp_path, provider, price_provider=_FailingQuoteProvider())
+        payload = {**_BASE_PAYLOAD, "current_price": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+
+        assert body["market_data"]["current_price"] is None
+        assert body["market_data"]["fetch_errors"]
+        assert body["dcf"]["gap"] is None
+
+    def test_kr_market_price_tries_ks_suffix_then_kq(self, tmp_path: Path) -> None:
+        provider = _FakeProvider(
+            AnnualFinancialsResult(
+                asset_id="005930", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+            )
+        )
+        quote_provider = _FakeQuoteProvider(
+            quotes={
+                "005930.KQ": Quote(
+                    symbol="005930.KQ",
+                    quote_date=date(2026, 7, 18),
+                    close=Decimal("70000"),
+                    currency=Currency.KRW,
+                )
+            }
+        )
+        client = _client(tmp_path, provider, market="KR", price_provider=quote_provider)
+        payload = {
+            **_BASE_PAYLOAD,
+            "asset_id": "005930",
+            "market": "KR",
+            "current_price": None,
+        }
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        assert response.json()["market_data"]["current_price"] == "70000.00"
+
+    def test_shares_outstanding_auto_fetched_from_financials_when_omitted(
+        self, tmp_path: Path
+    ) -> None:
+        """발행주식수를 요청에서 생략하면 재무제표 조회 결과(shares_outstanding)로
+        자동 채운 값을 써야 한다 — 수동 입력 없이도 주당 적정가가 나와야 한다."""
+        annual = _NON_FINANCIAL_ANNUAL[:-1] + (
+            AnnualFinancials(
+                fiscal_year=2025,
+                revenue=Decimal(1331),
+                eps=Decimal(13),
+                operating_cash_flow=Decimal(180),
+                capex=Decimal(50),
+                shares_outstanding=Decimal(100),
+            ),
+        )
+        provider = _FakeProvider(
+            AnnualFinancialsResult(asset_id="TEST", data_source="fake", annual=annual)
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "shares_outstanding": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+
+        assert body["market_data"]["shares_outstanding"] == "100"
+        assert body["dcf"]["fair_value_per_share"] is not None
 
     def test_missing_base_fcf_skips_dcf_but_still_scores(self, tmp_path: Path) -> None:
         annual = (AnnualFinancials(fiscal_year=2025, revenue=Decimal(1000)),)

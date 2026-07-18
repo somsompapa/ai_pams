@@ -83,7 +83,13 @@ from pams.interfaces.api.service import DashboardService
 from pams.journal.application import ListJournalEntries, RecordJournalEntry
 from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
-from pams.market_data.infrastructure import CsvPriceLookup, upsert_fx_rate, upsert_price_symbol
+from pams.market_data.domain import MarketDataProviderError, QuoteProvider
+from pams.market_data.infrastructure import (
+    CsvPriceLookup,
+    YahooQuoteProvider,
+    upsert_fx_rate,
+    upsert_price_symbol,
+)
 from pams.market_regime.application import GradeMarketRegime
 from pams.market_regime.domain import Grade, MarketIndicatorProvider, MarketRegimeProviderError
 from pams.market_regime.infrastructure import (
@@ -500,6 +506,7 @@ def create_app(
     password: str | None = None,
     equity_providers: dict[str, FinancialStatementProvider] | None = None,
     market_indicator_provider: MarketIndicatorProvider | None = None,
+    equity_price_provider: QuoteProvider | None = None,
 ) -> FastAPI:
     dashboard_service = service if service is not None else default_dashboard_service()
     as_of = as_of_provider if as_of_provider is not None else _default_as_of
@@ -511,6 +518,7 @@ def create_app(
     audit_recorder = RecordAuditEvent(trail=JsonlAuditTrail(storage_dir / "audit.jsonl"))
     injected_equity_providers = equity_providers or {}
     indicator_provider = market_indicator_provider or YahooMarketRegimeIndicatorProvider()
+    price_provider = equity_price_provider or YahooQuoteProvider()
     text_completion = completion if completion is not None else _completion_from_env()
 
     app = FastAPI(title="PAMS", version="0.1.0")
@@ -1222,6 +1230,22 @@ def create_app(
         그대로 노출하면 API 응답이 읽기 어렵다."""
         return str(value.quantize(Decimal("0.0001"))) if value is not None else None
 
+    def _fetch_equity_price(asset_id: str, market: str) -> tuple[Decimal | None, str | None]:
+        """현재가 자동조회. 실패해도 예외를 던지지 않는다 — (값, 실패사유) 튜플로
+        돌려주고 값이 없으면 DCF 괴리율 계산만 생략한다(임의 대체 금지)."""
+        candidates = (asset_id,) if market == "US" else (f"{asset_id}.KS", f"{asset_id}.KQ")
+        errors: list[str] = []
+        for symbol in candidates:
+            try:
+                quote = price_provider.latest_quote(symbol)
+            except MarketDataProviderError as error:
+                errors.append(f"{symbol}: {error}")
+                continue
+            if quote is not None:
+                return quote.close, None
+            errors.append(f"{symbol}: 조회 결과 없음")
+        return None, f"현재가 자동조회 실패({'; '.join(errors)})"
+
     @app.post("/api/equity-score")
     def compute_equity_score(request: EquityScoreRequest) -> dict[str, Any]:
         """종목 100점 스코어링 + DCF (company_analysis_rules.md 3장, equity.domain).
@@ -1241,6 +1265,23 @@ def create_app(
         annual = growth_report.financials.annual
         base_fcf = annual[-1].fcf if annual else None
 
+        # 종목 심볼만 입력해도 분석이 가능하도록, 현재가와 발행주식수는 명시 입력이
+        # 없을 때만 자동조회를 시도한다(있으면 그대로 존중 — 임의 대체 금지).
+        market_data_fetch_errors: list[str] = []
+        current_price = _optional_decimal("current_price", request.current_price)
+        if current_price is None:
+            current_price, price_error = _fetch_equity_price(request.asset_id, request.market)
+            if price_error is not None:
+                market_data_fetch_errors.append(price_error)
+        shares_outstanding = _optional_decimal("shares_outstanding", request.shares_outstanding)
+        if shares_outstanding is None:
+            shares_outstanding = annual[-1].shares_outstanding if annual else None
+            if shares_outstanding is None:
+                market_data_fetch_errors.append(
+                    "발행주식수 자동조회 실패(재무제표에 미포함) — 직접 입력하면 "
+                    "주당 적정가를 계산할 수 있다"
+                )
+
         dcf_payload: dict[str, Any] | None = None
         dcf_score: Decimal | None = None
         if base_fcf is not None:
@@ -1254,14 +1295,12 @@ def create_app(
                         for i, g in enumerate(request.growth_path)
                     ),
                     net_debt=_optional_decimal("net_debt", request.net_debt) or Decimal(0),
-                    shares_outstanding=_optional_decimal(
-                        "shares_outstanding", request.shares_outstanding
-                    ),
+                    shares_outstanding=shares_outstanding,
                     wacc_basis=request.wacc_basis,
                 )
                 dcf_report = CalculateDcf().execute(
                     assumptions,
-                    current_price=_optional_decimal("current_price", request.current_price),
+                    current_price=current_price,
                 )
                 dcf_score = dcf_report.gap.score if dcf_report.gap is not None else None
                 dcf_payload = {
@@ -1408,6 +1447,13 @@ def create_app(
         return {
             "score": _serialize_score_report(score_report),
             "financials": _serialize_financials_result(growth_report.financials),
+            "market_data": {
+                "current_price": _money_str(current_price) if current_price is not None else None,
+                "shares_outstanding": (
+                    str(shares_outstanding) if shares_outstanding is not None else None
+                ),
+                "fetch_errors": market_data_fetch_errors,
+            },
             "growth_metrics": {
                 "revenue_cagr_3y": _ratio_str(metrics.revenue_cagr_3y),
                 "revenue_cagr_3y_note": metrics.revenue_cagr_3y_note,

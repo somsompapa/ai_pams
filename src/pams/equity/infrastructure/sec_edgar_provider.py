@@ -61,8 +61,9 @@ _TAG_CANDIDATES: dict[str, tuple[str, ...]] = {
     ),
     "operating_cash_flow": ("NetCashProvidedByUsedInOperatingActivities",),
     "capex": ("PaymentsToAcquirePropertyPlantAndEquipment",),
+    "shares_outstanding": ("CommonStockSharesOutstanding", "CommonStockSharesIssued"),
 }
-_UNIT_OVERRIDES: dict[str, str] = {"eps": "USD/shares"}
+_UNIT_OVERRIDES: dict[str, str] = {"eps": "USD/shares", "shares_outstanding": "shares"}
 
 
 def _to_decimal(value: object) -> Decimal | None:
@@ -209,6 +210,7 @@ class SecEdgarFinancialStatementProvider:
                     cash=extracted["cash"].get(fy),
                     operating_cash_flow=extracted["operating_cash_flow"].get(fy),
                     capex=extracted["capex"].get(fy),
+                    shares_outstanding=extracted["shares_outstanding"].get(fy),
                 )
             )
         return AnnualFinancialsResult(

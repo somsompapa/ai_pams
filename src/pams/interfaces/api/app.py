@@ -60,6 +60,7 @@ from pams.equity.domain import (
     band_trigger,
     compute_price_band,
     evaluate_buy_gate,
+    evaluate_liquidity,
     evaluate_sell_review,
 )
 from pams.equity.domain.financial_statement import (
@@ -89,6 +90,8 @@ from pams.journal.application import ListJournalEntries, RecordJournalEntry
 from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
 from pams.market_data.domain import (
+    DailyBar,
+    DailyVolumeProvider,
     HistoricalQuoteProvider,
     MarketDataProviderError,
     Quote,
@@ -237,6 +240,19 @@ class BuyGateRequest(BaseModel):
     # DCF는 조건3 충족인데 이 값이 낮으면(상단·richly-valued) 그 불일치를 고지한다
     # (valuation_rules.md V-2, v1.6.1).
     relative_valuation_score: str | None = None
+
+
+class LiquidityCheckRequest(BaseModel):
+    """유동성 스크리닝(portfolio_rules.md P-5, v1.6.1 신규) 요청 — buy_rules.md B-3
+    체크리스트가 참조하는 매수 전 참고용 확인. 최근 20영업일 평균 거래대금이 1차
+    매수 예정 금액의 최소 20배는 돼야 시장충격 없이 분할매수가 가능하다고 본다.
+    자동 차단이 아니다 — 미달이면 분할 횟수를 늘리거나 목표 수량을 줄이는 등
+    사용자 판단을 보조할 뿐이다.
+    """
+
+    asset_id: str
+    market: Literal["US", "KR"]
+    planned_first_tranche_amount: str
 
 
 class SellReviewRequest(BaseModel):
@@ -1844,6 +1860,49 @@ def create_app(
                 {"condition": c.condition, "met": c.met, "detail": c.detail, "caution": c.caution}
                 for c in result.conditions
             ],
+        }
+
+    @app.post("/api/liquidity-check")
+    def compute_liquidity_check(request: LiquidityCheckRequest) -> dict[str, Any]:
+        """유동성 스크리닝(portfolio_rules.md P-5). buy_rules.md B-3 체크리스트가
+        참조하는 매수 전 참고용 확인 — 자동 차단이 아니다."""
+        amount = _required_decimal(
+            "planned_first_tranche_amount", request.planned_first_tranche_amount
+        )
+        bars: tuple[DailyBar, ...] = ()
+        if isinstance(price_provider, DailyVolumeProvider):
+            candidates = (
+                (request.asset_id,)
+                if request.market == "US"
+                else (f"{request.asset_id}.KS", f"{request.asset_id}.KQ")
+            )
+            for symbol in candidates:
+                try:
+                    bars = price_provider.recent_daily_bars(symbol, days=20)
+                except MarketDataProviderError:
+                    continue
+                if bars:
+                    break
+        result = evaluate_liquidity(planned_first_tranche_amount=amount, daily_bars=bars)
+        liquidity_label = "충족" if result.sufficient else "미확인/미달"
+        record_audit(
+            actor="user",
+            action="liquidity_check.evaluated",
+            detail=f"{request.asset_id} 유동성 확인: {liquidity_label}",
+            reason="웹 매수판정 요청",
+        )
+        return {
+            "average_daily_trading_value": (
+                _money_str(result.average_daily_trading_value)
+                if result.average_daily_trading_value is not None
+                else None
+            ),
+            "required_minimum": (
+                _money_str(result.required_minimum) if result.required_minimum is not None else None
+            ),
+            "sufficient": result.sufficient,
+            "days_observed": result.days_observed,
+            "note": result.note,
         }
 
     @app.post("/api/sell-review")

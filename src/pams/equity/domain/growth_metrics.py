@@ -47,6 +47,10 @@ def _cagr_3y(
     end = getter(annual_sorted[-1])
     if begin is None or end is None or begin <= 0:
         return None, f"{label} 3Y CAGR 계산 불가 — 기초/기말 값 누락 또는 기초값 0 이하"
+    if end <= 0:
+        # growth = end/begin이 0 이하면 ln()이 정의되지 않는다(적자 전환 등). 음(-)의
+        # 성장률을 임의로 지어내는 대신 계산 불가로 명시한다(임의추정 금지 원칙).
+        return None, f"{label} 3Y CAGR 계산 불가 — 기말 값이 0 이하(적자/역성장 전환)"
     growth = end / begin
     return (growth.ln() / _THREE_YEARS).exp() - 1, None
 

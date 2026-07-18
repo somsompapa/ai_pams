@@ -601,3 +601,51 @@ class TestEquityScoreApi:
         client.post("/api/equity-score", json=_BASE_PAYLOAD)
         audit_log = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
         assert "equity_score.computed" in audit_log
+
+
+class TestNegativeLatestYearDoesNotCrash:
+    """회귀 테스트: 최근 연도가 적자 전환(EPS·매출 등이 음수)이면 3Y CAGR의
+    Decimal.ln()이 InvalidOperation을 던져 API가 500으로 죽었다(실사용 리포트).
+    200으로 응답하고 해당 CAGR만 계산 불가로 처리해야 한다."""
+
+    def test_negative_latest_eps_returns_200_not_500(self, tmp_path: Path) -> None:
+        annual = (
+            AnnualFinancials(
+                fiscal_year=2022,
+                revenue=Decimal(1000),
+                eps=Decimal(10),
+                operating_cash_flow=Decimal(150),
+                capex=Decimal(50),
+            ),
+            AnnualFinancials(
+                fiscal_year=2023,
+                revenue=Decimal(1100),
+                eps=Decimal(11),
+                operating_cash_flow=Decimal(160),
+                capex=Decimal(50),
+            ),
+            AnnualFinancials(
+                fiscal_year=2024,
+                revenue=Decimal(1210),
+                eps=Decimal(5),
+                operating_cash_flow=Decimal(170),
+                capex=Decimal(50),
+            ),
+            AnnualFinancials(
+                fiscal_year=2025,
+                revenue=Decimal(1331),
+                eps=Decimal(-3),
+                operating_cash_flow=Decimal(180),
+                capex=Decimal(50),
+            ),
+        )
+        provider = _FakeProvider(
+            AnnualFinancialsResult(asset_id="TEST", data_source="fake", annual=annual)
+        )
+        client = _client(tmp_path, provider)
+        response = client.post("/api/equity-score", json=_BASE_PAYLOAD)
+        assert response.status_code == 200
+        body = response.json()
+        growth = next(c for c in body["score"]["categories"] if c["category"] == "성장성")
+        eps_item = next(i for i in growth["items"] if i["metric"] == "EPS 3Y CAGR")
+        assert eps_item["value"] == "—"

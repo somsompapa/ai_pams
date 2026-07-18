@@ -51,6 +51,21 @@ class TestRevenueAndEpsCagr:
         metrics = compute_growth_metrics(annual)
         assert metrics.revenue_cagr_3y is None
 
+    def test_negative_latest_year_value_returns_none_not_crash(self) -> None:
+        """회귀 테스트: 최근 연도 EPS가 적자로 전환(음수)되면 growth=end/begin이 음수라
+        Decimal.ln()이 InvalidOperation을 던진다 — 이를 처리하지 않으면 API가 500으로
+        죽는다(실사용 리포트: 352820). 임의로 음의 성장률을 지어내지 않고 계산 불가로
+        명시해야 한다."""
+        annual = (
+            _row(2022, eps=Decimal(10)),
+            _row(2023, eps=Decimal(11)),
+            _row(2024, eps=Decimal(5)),
+            _row(2025, eps=Decimal(-3)),
+        )
+        metrics = compute_growth_metrics(annual)
+        assert metrics.eps_cagr_3y is None
+        assert "0 이하" in (metrics.eps_cagr_3y_note or "")
+
 
 class TestFinancialSectorTotalAssetsCagr:
     def test_matches_shinhan_financial_group_actual_scale(self) -> None:

@@ -30,6 +30,7 @@ class GrowthMetrics:
     roa_latest: Decimal | None
     roe_latest: Decimal | None
     debt_ratio_latest: Decimal | None
+    roic_latest: Decimal | None
 
 
 def _cagr_3y(
@@ -82,6 +83,7 @@ def compute_growth_metrics(annual: tuple[AnnualFinancials, ...]) -> GrowthMetric
     roa: Decimal | None = None
     roe: Decimal | None = None
     debt_ratio: Decimal | None = None
+    roic: Decimal | None = None
     if sorted_annual:
         last = sorted_annual[-1]
         if last.revenue is not None and last.revenue > 0 and last.gross_profit is not None:
@@ -101,6 +103,23 @@ def compute_growth_metrics(annual: tuple[AnnualFinancials, ...]) -> GrowthMetric
         # total_debt·total_equity 모두 이미 조회된 값이므로 수동 입력 없이도 계산 가능하다.
         if last.total_debt is not None and last.total_equity is not None and last.total_equity > 0:
             debt_ratio = last.total_debt / last.total_equity
+        # ROIC = NOPAT / Invested Capital. NOPAT = 영업이익×(1-유효세율), 유효세율은
+        # 법인세비용÷세전이익(=순이익+법인세비용)의 항등식으로 구한다(세율을 임의로
+        # 가정하지 않는다 — 임의추정 금지). Invested Capital = 총부채+자기자본-현금.
+        if (
+            last.operating_income is not None
+            and last.income_tax_expense is not None
+            and last.net_income is not None
+            and last.total_debt is not None
+            and last.total_equity is not None
+            and last.cash is not None
+        ):
+            pretax_income = last.net_income + last.income_tax_expense
+            invested_capital = last.total_debt + last.total_equity - last.cash
+            if pretax_income > 0 and invested_capital > 0:
+                effective_tax_rate = last.income_tax_expense / pretax_income
+                nopat = last.operating_income * (1 - effective_tax_rate)
+                roic = nopat / invested_capital
 
     return GrowthMetrics(
         revenue_cagr_3y=revenue_cagr,
@@ -115,4 +134,5 @@ def compute_growth_metrics(annual: tuple[AnnualFinancials, ...]) -> GrowthMetric
         roa_latest=roa,
         roe_latest=roe,
         debt_ratio_latest=debt_ratio,
+        roic_latest=roic,
     )

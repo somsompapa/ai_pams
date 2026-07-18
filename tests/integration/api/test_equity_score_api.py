@@ -256,6 +256,78 @@ class TestEquityScoreApi:
         assert debt_item["value"] == "1.5000"
         assert body["growth_metrics"]["debt_ratio_latest"] == "1.5000"
 
+    def test_roic_auto_fills_from_financials_when_omitted(self, tmp_path: Path) -> None:
+        """roic를 생략하면 영업이익·유효세율·투하자본(총부채+자기자본-현금)으로
+        자동 계산한 값을 써야 한다 — 세율을 임의로 가정하지 않고 법인세비용÷세전이익
+        항등식으로 구한다."""
+        annual = (
+            AnnualFinancials(
+                fiscal_year=2025,
+                operating_income=Decimal(1000),
+                net_income=Decimal(750),
+                income_tax_expense=Decimal(250),
+                total_debt=Decimal(2000),
+                total_equity=Decimal(3000),
+                cash=Decimal(500),
+            ),
+        )
+        provider = _FakeProvider(
+            AnnualFinancialsResult(asset_id="TEST", data_source="fake", annual=annual)
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "roic": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["growth_metrics"]["roic_latest"] == "0.1667"
+
+    def test_peg_auto_computed_from_current_price_eps_and_cagr_when_omitted(
+        self, tmp_path: Path
+    ) -> None:
+        """peg를 생략하면 현재가÷최근연도EPS(=PER)와 EPS 3Y CAGR로 자동 계산해야
+        한다 — 새 데이터 없이 이미 조회된 값들의 항등식이다."""
+        provider = _FakeProvider(
+            AnnualFinancialsResult(
+                asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+            )
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "peg": None, "current_price": "130"}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+        # 최근연도(2025) EPS=13 → PER = 130/13 = 10, EPS 3Y CAGR = (13/10)^(1/3)-1 ≈ 9.14%
+        # → PEG = 10/9.14 ≈ 1.09
+        assert body["relative_valuation"]["peg_used"] == "1.09"
+        assert body["relative_valuation"]["missing"] == ["PER밴드", "PBR밴드"]
+
+    def test_peg_explicit_value_not_overridden(self, tmp_path: Path) -> None:
+        provider = _FakeProvider(
+            AnnualFinancialsResult(
+                asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+            )
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "peg": "0.8", "current_price": "130"}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["relative_valuation"]["peg_used"] == "0.80"
+
+    def test_peg_stays_none_when_current_price_missing(self, tmp_path: Path) -> None:
+        provider = _FakeProvider(
+            AnnualFinancialsResult(
+                asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+            )
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "peg": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["relative_valuation"]["peg_used"] is None
+        assert any("PEG 자동계산 실패" in e for e in body["market_data"]["fetch_errors"])
+
     def test_missing_shares_outstanding_keeps_enterprise_value_drops_per_share_only(
         self, tmp_path: Path
     ) -> None:

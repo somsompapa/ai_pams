@@ -187,3 +187,66 @@ class TestLatestRatios:
         assert no_equity.debt_ratio_latest is None
         annual = (_row(2025, total_debt=Decimal(600), total_equity=Decimal(0)),)
         assert compute_growth_metrics(annual).debt_ratio_latest is None
+
+
+class TestRoicLatest:
+    """ROIC = NOPAT / Invested Capital, NOPAT = 영업이익×(1-유효세율).
+    유효세율 = 법인세비용÷세전이익(=순이익+법인세비용) 항등식 — 세율을 가정하지 않는다."""
+
+    def test_computes_roic_from_operating_income_and_effective_tax_rate(self) -> None:
+        annual = (
+            _row(
+                2025,
+                operating_income=Decimal(1000),
+                net_income=Decimal(750),
+                income_tax_expense=Decimal(250),  # 세전이익 1000, 유효세율 25%
+                total_debt=Decimal(2000),
+                total_equity=Decimal(3000),
+                cash=Decimal(500),
+            ),
+        )
+        metrics = compute_growth_metrics(annual)
+        # NOPAT = 1000*(1-0.25) = 750, Invested Capital = 2000+3000-500 = 4500
+        assert metrics.roic_latest is not None
+        assert abs(metrics.roic_latest - Decimal("0.16667")) < Decimal("0.0001")
+
+    def test_none_when_income_tax_expense_missing(self) -> None:
+        annual = (
+            _row(
+                2025,
+                operating_income=Decimal(1000),
+                net_income=Decimal(750),
+                total_debt=Decimal(2000),
+                total_equity=Decimal(3000),
+                cash=Decimal(500),
+            ),
+        )
+        assert compute_growth_metrics(annual).roic_latest is None
+
+    def test_none_when_invested_capital_zero_or_negative(self) -> None:
+        annual = (
+            _row(
+                2025,
+                operating_income=Decimal(1000),
+                net_income=Decimal(750),
+                income_tax_expense=Decimal(250),
+                total_debt=Decimal(100),
+                total_equity=Decimal(100),
+                cash=Decimal(500),  # invested capital = 100+100-500 < 0
+            ),
+        )
+        assert compute_growth_metrics(annual).roic_latest is None
+
+    def test_none_when_pretax_income_zero_or_negative(self) -> None:
+        annual = (
+            _row(
+                2025,
+                operating_income=Decimal(1000),
+                net_income=Decimal(-100),
+                income_tax_expense=Decimal(100),  # 세전이익 0
+                total_debt=Decimal(2000),
+                total_equity=Decimal(3000),
+                cash=Decimal(500),
+            ),
+        )
+        assert compute_growth_metrics(annual).roic_latest is None

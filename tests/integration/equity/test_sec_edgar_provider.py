@@ -205,3 +205,24 @@ class TestSecEdgarFinancialStatementProvider:
         provider = self.make(handler)
         result = provider.annual_financials("AAPL", years=1)
         assert result.annual[0].shares_outstanding == Decimal("15000000000.0")
+
+    def test_income_tax_expense_extracted_for_roic(self) -> None:
+        """ROIC 유효세율 계산 전용(growth_metrics.py roic_latest)."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "company_tickers" in str(request.url):
+                return httpx.Response(200, json=_TICKERS_BODY)
+            facts = {
+                "facts": {
+                    "us-gaap": {
+                        "IncomeTaxExpenseBenefit": {
+                            "units": {"USD": [_fact_entry(2025, "2025-12-31", 250_000_000.0)]}
+                        },
+                    }
+                }
+            }
+            return httpx.Response(200, json=facts)
+
+        provider = self.make(handler)
+        result = provider.annual_financials("AAPL", years=1)
+        assert result.annual[0].income_tax_expense == Decimal("250000000.0")

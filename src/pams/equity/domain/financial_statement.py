@@ -53,6 +53,9 @@ class AnnualFinancials:
     operating_cash_flow: Decimal | None = None
     capex: Decimal | None = None
     shares_outstanding: Decimal | None = None
+    # ROIC의 NOPAT = 영업이익×(1-유효세율) 계산 전용. 유효세율 = 법인세비용÷세전이익
+    # (=순이익+법인세비용) 항등식으로 구하므로 세율을 임의로 가정하지 않는다.
+    income_tax_expense: Decimal | None = None
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -70,6 +73,7 @@ class AnnualFinancials:
             ("operating_cash_flow", self.operating_cash_flow),
             ("capex", self.capex),
             ("shares_outstanding", self.shares_outstanding),
+            ("income_tax_expense", self.income_tax_expense),
         ):
             _validate_decimal(name, value)
 

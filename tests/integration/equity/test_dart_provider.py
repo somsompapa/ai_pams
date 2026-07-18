@@ -403,3 +403,37 @@ class TestEpsFallback:
         row = result.annual[0]
         assert row.eps is None
         assert row.eps_derived is False
+
+
+class TestIncomeTaxExpense:
+    """ROIC 유효세율 계산 전용 계정(법인세비용) 조회 — growth_metrics.py의
+    roic_latest 산식이 이 필드에 의존한다."""
+
+    def make(self, handler, tmp_path) -> DartFinancialStatementProvider:  # type: ignore[no-untyped-def]
+        return DartFinancialStatementProvider(
+            api_key="test-key",
+            corp_code_cache_path=tmp_path / "corp_code_cache.xml",
+            transport=httpx.MockTransport(handler),
+        )
+
+    def test_extracts_income_tax_expense_account(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "corpCode" in url:
+                return httpx.Response(200, content=_corp_code_zip_bytes())
+            if "stockTotqySttus" in url:
+                return httpx.Response(200, json={"status": "013", "message": "no data"})
+            year = request.url.params.get("bsns_year")
+            if year != "2025":
+                return httpx.Response(200, json={"status": "013", "message": "no data"})
+            return httpx.Response(
+                200,
+                json={
+                    "status": "000",
+                    "list": [_dart_item("법인세비용", "250,000,000")],
+                },
+            )
+
+        provider = self.make(handler, tmp_path)
+        result = provider.annual_financials("352820", years=1)
+        assert result.annual[0].income_tax_expense == Decimal("250000000")

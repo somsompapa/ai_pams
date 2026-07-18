@@ -158,8 +158,11 @@ class EquityScoreRequest(BaseModel):
     # DCF 가정 (기준 FCF는 조회된 재무제표 최신연도에서 자동 채움 — 미확보 시 DCF 생략)
     wacc: str
     terminal_growth: str
-    growth_path: list[str]
-    net_debt: str = "0"
+    # 비워두면(None) 매출 3Y CAGR(금융업은 총자산 3Y CAGR)에서 영구성장률까지 선형으로
+    # 체감하는 경로를 자동 산출한다 — 과거 실측 성장률 기반이라 임의추정이 아니다.
+    growth_path: list[str] | None = None
+    # 비워두면(None) 이미 조회된 총부채-현금으로 자동 계산한다.
+    net_debt: str | None = None
     shares_outstanding: str | None = None
     current_price: str | None = None
     wacc_basis: str = ""
@@ -1361,19 +1364,66 @@ def create_app(
                     "주당 적정가를 계산할 수 있다"
                 )
 
+        # 순부채도 이미 조회된 총부채·현금으로 계산 가능하므로, 명시 입력이 없을 때만
+        # 자동계산한다(항등식 기반 — 임의추정 아님. 0으로 방치하면 순부채가 큰 회사는
+        # 기업가치·주당가치가 왜곡된다).
+        net_debt = _optional_decimal("net_debt", request.net_debt)
+        if net_debt is None:
+            last_annual = annual[-1] if annual else None
+            if (
+                last_annual is not None
+                and last_annual.total_debt is not None
+                and last_annual.cash is not None
+            ):
+                net_debt = last_annual.total_debt - last_annual.cash
+            else:
+                net_debt = Decimal(0)
+                market_data_fetch_errors.append(
+                    "순부채 자동계산 실패(총부채·현금 미확보) — 0으로 처리, 직접 입력하면 반영된다"
+                )
+
         dcf_payload: dict[str, Any] | None = None
         dcf_score: Decimal | None = None
         if base_fcf is not None:
             try:
-                assumptions = DcfAssumptions(
-                    base_fcf=base_fcf,
-                    wacc=_required_decimal("wacc", request.wacc),
-                    terminal_growth=_required_decimal("terminal_growth", request.terminal_growth),
-                    growth_path=tuple(
+                wacc = _required_decimal("wacc", request.wacc)
+                terminal_growth = _required_decimal("terminal_growth", request.terminal_growth)
+                if request.growth_path:
+                    growth_path = tuple(
                         _required_decimal(f"growth_path[{i}]", g)
                         for i, g in enumerate(request.growth_path)
-                    ),
-                    net_debt=_optional_decimal("net_debt", request.net_debt) or Decimal(0),
+                    )
+                else:
+                    # 예측기간 성장률도 종목과 무관한 고정값 대신, 이미 계산된 과거 실측
+                    # 성장률(매출 3Y CAGR, 금융업은 총자산 3Y CAGR)에서 영구성장률까지
+                    # 선형으로 체감하는 경로를 자동 산출한다(임의추정 아님 — 회사 자신의
+                    # 과거 데이터를 근거로 삼는다). 과거 데이터 자체가 없으면 어쩔 수 없이
+                    # 일반적인 자리표시자 값을 쓰고, 그 사실을 명시한다.
+                    historical_cagr = (
+                        metrics.total_assets_cagr_3y
+                        if request.is_financial
+                        else metrics.revenue_cagr_3y
+                    )
+                    if historical_cagr is not None:
+                        steps = 5
+                        growth_path = tuple(
+                            historical_cagr + (terminal_growth - historical_cagr) * i / (steps - 1)
+                            for i in range(steps)
+                        )
+                    else:
+                        growth_path = tuple(
+                            Decimal(v) for v in ("0.10", "0.10", "0.08", "0.08", "0.08")
+                        )
+                        market_data_fetch_errors.append(
+                            "예측기간 성장률 자동산출 실패(과거 매출 CAGR 미확보) — "
+                            "일반적인 기본값(10/10/8/8/8%)을 사용했다, 직접 입력 권장"
+                        )
+                assumptions = DcfAssumptions(
+                    base_fcf=base_fcf,
+                    wacc=wacc,
+                    terminal_growth=terminal_growth,
+                    growth_path=growth_path,
+                    net_debt=net_debt,
                     shares_outstanding=shares_outstanding,
                     wacc_basis=request.wacc_basis,
                 )
@@ -1383,6 +1433,11 @@ def create_app(
                 )
                 dcf_score = dcf_report.gap.score if dcf_report.gap is not None else None
                 dcf_payload = {
+                    # 순부채·성장경로가 자동산출된 경우 입력창에 그대로 채워 보여준다
+                    # (무엇이 자동으로 채워졌는지 투명하게 — current_price/shares_outstanding과
+                    # 동일한 원칙).
+                    "net_debt_used": str(net_debt),
+                    "growth_path_used": [_ratio_str(g) for g in growth_path],
                     "fair_value_per_share": (
                         _money_str(dcf_report.result.fair_value_per_share)
                         if dcf_report.result.fair_value_per_share is not None

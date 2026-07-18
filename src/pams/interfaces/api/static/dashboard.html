@@ -488,13 +488,13 @@
       </div>
       <label><input type="checkbox" id="eq-is-financial"> 금융업(은행/보험/증권/지주) — 매출·매출총이익률 대신 총자산 CAGR·ROA 사용</label>
 
-      <h3>DCF 가정 <span class="empty">(기본값 채워짐 — 그대로 쓰거나 수정)</span></h3>
+      <h3>DCF 가정 <span class="empty">(WACC·g는 기본값 채워짐, 성장률·순부채는 비워두면 실측 데이터로 자동 산출)</span></h3>
       <div class="grid2">
         <input id="eq-wacc" placeholder="WACC (%)" value="8.5" required>
         <input id="eq-terminal-growth" placeholder="영구성장률 g (%)" value="2.5" required>
-        <input id="eq-growth-path" placeholder="예측기간 성장률(%, 콤마구분)" value="10,10,8,8,8" required>
+        <input id="eq-growth-path" placeholder="예측기간 성장률(%, 콤마구분) — 비워두면 매출 3Y CAGR 기준 자동 산출">
         <input id="eq-shares" placeholder="발행주식수 (없으면 주당가치 생략)">
-        <input id="eq-net-debt" placeholder="순부채 (기본 0, 순현금이면 음수)" value="0">
+        <input id="eq-net-debt" placeholder="순부채 — 비워두면 총부채-현금으로 자동 계산">
         <input id="eq-current-price" placeholder="현재가 (있으면 괴리율 계산)">
       </div>
       <input id="eq-wacc-basis" placeholder="WACC 근거 (예: CAPM 10.3%+세후부채3.5%→8.5%, 기본값 사용 시 비워도 됨)">
@@ -1654,6 +1654,18 @@ function renderEquityScore(body) {
     if (md.current_price && !el("eq-current-price").value) el("eq-current-price").value = md.current_price;
     if (md.shares_outstanding && !el("eq-shares").value) el("eq-shares").value = md.shares_outstanding;
   }
+  // 순부채(총부채-현금)·예측기간 성장률(과거 매출 CAGR 기준 자동산출)도 동일하게
+  // 채워 보여준다 — DCF 계산에 실제로 쓰인 값이므로.
+  if (body.dcf && !body.dcf.error) {
+    if (body.dcf.net_debt_used !== undefined && !el("eq-net-debt").value) {
+      el("eq-net-debt").value = body.dcf.net_debt_used;
+    }
+    if (body.dcf.growth_path_used && !el("eq-growth-path").value) {
+      el("eq-growth-path").value = body.dcf.growth_path_used
+        .map((g) => String(Number(g) * 100))
+        .join(",");
+    }
+  }
 
   const rv = body.relative_valuation;
   let rvHtml = "";
@@ -1709,9 +1721,11 @@ guardSubmit(el("eq-form"), async () => {
     is_financial: el("eq-is-financial").checked,
     wacc: pct("eq-wacc"),
     terminal_growth: pct("eq-terminal-growth"),
-    growth_path: el("eq-growth-path").value.split(",").map((s) => String(Number(s.trim()) / 100)),
+    growth_path: el("eq-growth-path").value.trim()
+      ? el("eq-growth-path").value.split(",").map((s) => String(Number(s.trim()) / 100))
+      : null,
     shares_outstanding: raw("eq-shares"),
-    net_debt: raw("eq-net-debt") ?? "0",
+    net_debt: raw("eq-net-debt"),
     current_price: raw("eq-current-price"),
     wacc_basis: el("eq-wacc-basis").value,
     per_band_percentile: pct("eq-per-pct"),

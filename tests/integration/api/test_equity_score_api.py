@@ -89,6 +89,7 @@ _BASE_PAYLOAD = {
     "wacc": "0.085",
     "terminal_growth": "0.025",
     "growth_path": ["0.1", "0.1", "0.1", "0.1", "0.1"],
+    "net_debt": "0",
     "shares_outstanding": "100",
     "market_share_trend": "up",
     "gross_margin_vs_industry_pp": "0.06",
@@ -375,6 +376,180 @@ class TestEquityScoreApi:
 
         assert body["market_data"]["shares_outstanding"] == "100"
         assert body["dcf"]["fair_value_per_share"] is not None
+
+    def test_net_debt_auto_computed_from_total_debt_and_cash_when_omitted(
+        self, tmp_path: Path
+    ) -> None:
+        """순부채를 생략하면 이미 조회된 총부채-현금으로 자동 계산해야 한다 — 무작정
+        0으로 방치하면 순부채가 큰 회사는 기업가치가 왜곡된다."""
+        annual = _NON_FINANCIAL_ANNUAL[:-1] + (
+            AnnualFinancials(
+                fiscal_year=2025,
+                revenue=Decimal(1331),
+                eps=Decimal(13),
+                operating_cash_flow=Decimal(180),
+                capex=Decimal(50),
+                total_debt=Decimal(500),
+                cash=Decimal(120),
+            ),
+        )
+        provider = _FakeProvider(
+            AnnualFinancialsResult(asset_id="TEST", data_source="fake", annual=annual)
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "net_debt": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+
+        assert body["dcf"]["net_debt_used"] == "380"  # 500 - 120
+        assert not any("순부채" in e for e in body["market_data"]["fetch_errors"])
+
+    def test_net_debt_explicit_value_not_overridden(self, tmp_path: Path) -> None:
+        annual = _NON_FINANCIAL_ANNUAL[:-1] + (
+            AnnualFinancials(
+                fiscal_year=2025,
+                revenue=Decimal(1331),
+                eps=Decimal(13),
+                operating_cash_flow=Decimal(180),
+                capex=Decimal(50),
+                total_debt=Decimal(500),
+                cash=Decimal(120),
+            ),
+        )
+        provider = _FakeProvider(
+            AnnualFinancialsResult(asset_id="TEST", data_source="fake", annual=annual)
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "net_debt": "999"}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        assert response.json()["dcf"]["net_debt_used"] == "999"
+
+    def test_net_debt_falls_back_to_zero_with_note_when_total_debt_or_cash_missing(
+        self, tmp_path: Path
+    ) -> None:
+        provider = _FakeProvider(
+            AnnualFinancialsResult(
+                asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+            )
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "net_debt": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["dcf"]["net_debt_used"] == "0"
+        assert body["market_data"]["fetch_errors"]
+
+    def test_growth_path_auto_derived_from_historical_revenue_cagr_when_omitted(
+        self, tmp_path: Path
+    ) -> None:
+        """예측기간 성장률을 생략하면 매출 3Y CAGR(10% 정확히, _NON_FINANCIAL_ANNUAL 기준)
+        에서 영구성장률(2.5%)까지 선형으로 체감하는 5개년 경로를 자동 산출해야 한다."""
+        provider = _FakeProvider(
+            AnnualFinancialsResult(
+                asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+            )
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "growth_path": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+
+        used = [Decimal(v) for v in body["dcf"]["growth_path_used"]]
+        assert len(used) == 5
+        assert abs(used[0] - Decimal("0.10")) < Decimal("0.0001")  # 매출 3Y CAGR 시작점
+        assert abs(used[-1] - Decimal("0.025")) < Decimal("0.0001")  # 영구성장률 도착점
+        assert used[0] > used[1] > used[2] > used[3] > used[4]  # 선형 체감
+
+    def test_growth_path_explicit_value_not_overridden(self, tmp_path: Path) -> None:
+        provider = _FakeProvider(
+            AnnualFinancialsResult(
+                asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
+            )
+        )
+        client = _client(tmp_path, provider)
+        response = client.post("/api/equity-score", json=_BASE_PAYLOAD)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["dcf"]["growth_path_used"] == ["0.1000", "0.1000", "0.1000", "0.1000", "0.1000"]
+
+    def test_growth_path_falls_back_to_static_default_when_no_historical_cagr(
+        self, tmp_path: Path
+    ) -> None:
+        """과거 매출 CAGR 자체가 없으면(데이터 부족) 어쩔 수 없이 일반적인 기본값을
+        쓰되, 그 사실을 fetch_errors로 명시해야 한다(조용히 넘어가지 않는다)."""
+        annual = (
+            AnnualFinancials(
+                fiscal_year=2025,
+                revenue=Decimal(1000),
+                eps=Decimal(10),
+                operating_cash_flow=Decimal(180),
+                capex=Decimal(50),
+            ),
+        )
+        provider = _FakeProvider(
+            AnnualFinancialsResult(asset_id="TEST", data_source="fake", annual=annual)
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "growth_path": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["dcf"]["growth_path_used"] == ["0.1000", "0.1000", "0.0800", "0.0800", "0.0800"]
+        assert body["market_data"]["fetch_errors"]
+
+    def test_growth_path_uses_total_assets_cagr_for_financial_sector(self, tmp_path: Path) -> None:
+        """금융업은 매출 개념이 없으므로(company_analysis_rules.md 3-1), 성장경로
+        자동산출도 매출 CAGR이 아니라 총자산 3Y CAGR을 근거로 삼아야 한다."""
+        annual = (
+            AnnualFinancials(
+                fiscal_year=2022,
+                total_assets=Decimal(1000),
+                net_income=Decimal(50),
+                operating_cash_flow=Decimal(180),
+                capex=Decimal(50),
+            ),
+            AnnualFinancials(
+                fiscal_year=2023,
+                total_assets=Decimal(1100),
+                net_income=Decimal(55),
+                operating_cash_flow=Decimal(180),
+                capex=Decimal(50),
+            ),
+            AnnualFinancials(
+                fiscal_year=2024,
+                total_assets=Decimal(1210),
+                net_income=Decimal(60),
+                operating_cash_flow=Decimal(180),
+                capex=Decimal(50),
+            ),
+            AnnualFinancials(
+                fiscal_year=2025,
+                total_assets=Decimal(1331),
+                net_income=Decimal(65),
+                operating_cash_flow=Decimal(180),
+                capex=Decimal(50),
+            ),
+        )
+        provider = _FakeProvider(
+            AnnualFinancialsResult(asset_id="TEST", data_source="fake", annual=annual)
+        )
+        client = _client(tmp_path, provider)
+        payload = {
+            **_BASE_PAYLOAD,
+            "growth_path": None,
+            "is_financial": True,
+            "roa_vs_industry_pp": "0.001",
+            "gross_margin_vs_industry_pp": None,
+        }
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+        used = [Decimal(v) for v in body["dcf"]["growth_path_used"]]
+        assert abs(used[0] - Decimal("0.10")) < Decimal("0.0001")  # 총자산 3Y CAGR 시작점
 
     def test_missing_base_fcf_skips_dcf_but_still_scores(self, tmp_path: Path) -> None:
         annual = (AnnualFinancials(fiscal_year=2025, revenue=Decimal(1000)),)

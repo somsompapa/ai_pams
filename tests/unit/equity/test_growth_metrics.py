@@ -154,3 +154,21 @@ class TestLatestRatios:
         )
         metrics = compute_growth_metrics(annual)
         assert metrics.roe_latest is None
+
+    def test_debt_ratio_latest_computed_from_total_debt_and_equity(self) -> None:
+        """v1.4 정의(company_analysis_rules.md 3-3): 부채비율 = 총부채/자기자본.
+        이미 조회된 total_debt·total_equity로 수동 입력 없이 계산 가능해야 한다."""
+        annual = (_row(2025, total_debt=Decimal(600), total_equity=Decimal(400)),)
+        metrics = compute_growth_metrics(annual)
+        assert metrics.debt_ratio_latest == Decimal("1.5")
+
+    def test_debt_ratio_latest_none_when_total_debt_missing(self) -> None:
+        annual = (_row(2025, total_equity=Decimal(400)),)
+        metrics = compute_growth_metrics(annual)
+        assert metrics.debt_ratio_latest is None
+
+    def test_debt_ratio_latest_none_when_total_equity_zero_or_missing(self) -> None:
+        no_equity = compute_growth_metrics((_row(2025, total_debt=Decimal(600)),))
+        assert no_equity.debt_ratio_latest is None
+        annual = (_row(2025, total_debt=Decimal(600), total_equity=Decimal(0)),)
+        assert compute_growth_metrics(annual).debt_ratio_latest is None

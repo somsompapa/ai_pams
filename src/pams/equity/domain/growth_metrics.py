@@ -29,6 +29,7 @@ class GrowthMetrics:
     gross_margin_latest: Decimal | None
     roa_latest: Decimal | None
     roe_latest: Decimal | None
+    debt_ratio_latest: Decimal | None
 
 
 def _cagr_3y(
@@ -76,6 +77,7 @@ def compute_growth_metrics(annual: tuple[AnnualFinancials, ...]) -> GrowthMetric
     gross_margin: Decimal | None = None
     roa: Decimal | None = None
     roe: Decimal | None = None
+    debt_ratio: Decimal | None = None
     if sorted_annual:
         last = sorted_annual[-1]
         if last.revenue is not None and last.revenue > 0 and last.gross_profit is not None:
@@ -91,6 +93,10 @@ def compute_growth_metrics(annual: tuple[AnnualFinancials, ...]) -> GrowthMetric
             and last.net_income is not None
         ):
             roe = last.net_income / last.controlling_interest_equity
+        # 부채비율 v1.4 정의(company_analysis_rules.md 3-3): 총부채/자기자본.
+        # total_debt·total_equity 모두 이미 조회된 값이므로 수동 입력 없이도 계산 가능하다.
+        if last.total_debt is not None and last.total_equity is not None and last.total_equity > 0:
+            debt_ratio = last.total_debt / last.total_equity
 
     return GrowthMetrics(
         revenue_cagr_3y=revenue_cagr,
@@ -104,4 +110,5 @@ def compute_growth_metrics(annual: tuple[AnnualFinancials, ...]) -> GrowthMetric
         gross_margin_latest=gross_margin,
         roa_latest=roa,
         roe_latest=roe,
+        debt_ratio_latest=debt_ratio,
     )

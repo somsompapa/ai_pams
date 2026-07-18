@@ -146,6 +146,7 @@
   .alert:last-child { border-bottom: none; }
   .alert .sev { flex: none; }
   .empty { color: var(--muted); font-size: 0.85rem; }
+  .hint { color: var(--muted); font-size: 0.8rem; background: var(--bg); border-radius: 0.5rem; padding: 0.5rem 0.7rem; margin: 0.4rem 0; }
   .wide { grid-column: 1 / -1; }
   .ai-controls { display: flex; gap: 0.5rem; margin-bottom: 0.7rem; }
   select, input, textarea, form button {
@@ -450,7 +451,7 @@
 
       <h3>재무</h3>
       <div class="grid2">
-        <input id="eq-roe" placeholder="ROE (%)">
+        <input id="eq-roe" placeholder="ROE (%) — 비워두면 재무제표에서 자동 계산">
         <input id="eq-roic" placeholder="ROIC (%, WACC와 비교)">
         <select id="eq-op-margin-rank">
           <option value="">영업이익률 업종 순위 — 선택 안 함</option>
@@ -458,7 +459,7 @@
           <option value="mid">중위</option>
           <option value="bottom">하위</option>
         </select>
-        <input id="eq-debt-ratio" placeholder="부채비율(총부채/자기자본, %) — 비금융업만">
+        <input id="eq-debt-ratio" placeholder="부채비율(총부채/자기자본, %) — 비금융업만, 비워두면 자동 계산">
       </div>
 
       <details class="sub-form">
@@ -1413,6 +1414,13 @@ function raw(id) {
   return v === "" ? null : v;
 }
 
+const VERDICT_LABELS = {
+  strong_candidate: "강력 후보 (90점 이상)",
+  buy_review: "매수 검토 (80~89점)",
+  watchlist: "관심종목 (70~79점)",
+  exclude: "제외 (70점 미만)",
+};
+
 function renderEquityScore(body) {
   const score = body.score;
   const rows = score.categories.flatMap((c) =>
@@ -1421,16 +1429,27 @@ function renderEquityScore(body) {
   const table = "<table><thead><tr><th>대분류</th><th>지표</th><th>값</th><th>구간</th><th>점수</th><th>비고</th></tr></thead><tbody>" +
     rows.map((r) => "<tr>" + r.map((c) => "<td>" + esc(c) + "</td>").join("") + "</tr>").join("") +
     "</tbody></table>";
+  const hasMissing = rows.some((r) => r[2] === "—" || r[5].includes("데이터 누락"));
+  const missingNote = hasMissing
+    ? "<p class=\"hint\">💡 \"데이터 누락\"은 값을 추정하지 않고 0점 처리했다는 뜻입니다 — " +
+      "직접 입력하면 점수에 반영됩니다.</p>"
+    : "";
 
   let dcfHtml = "<p class=\"empty\">DCF 미산출(기준 FCF 확보 안 됨).</p>";
   if (body.dcf && body.dcf.error) {
     dcfHtml = "<p class=\"empty\">DCF 계산 불가: " + esc(body.dcf.error) + "</p>";
   } else if (body.dcf) {
     const gap = body.dcf.gap;
+    const zonesNote = body.dcf.trigger_zones_unavailable_reason
+      ? "<p class=\"hint\">💡 발행주식수를 입력하면 주당 적정가·매수/매도 기준가를 계산할 수 있습니다. " +
+        "(기업가치·자기자본가치는 이미 계산되었습니다)</p>"
+      : "";
     dcfHtml = "<div class=\"grid2\">" +
+      "<div>기업가치(EV): " + esc(body.dcf.enterprise_value) + "</div>" +
+      "<div>자기자본가치: " + esc(body.dcf.equity_value) + "</div>" +
       "<div>주당 적정가: " + (body.dcf.fair_value_per_share ?? "—(발행주식수 미입력)") + "</div>" +
       "<div>괴리율: " + (gap ? gap.gap_ratio + " (" + gap.label + ")" : "—(현재가 미입력)") + "</div>" +
-      "</div>";
+      "</div>" + zonesNote;
   }
 
   const rv = body.relative_valuation;
@@ -1441,12 +1460,13 @@ function renderEquityScore(body) {
   }
 
   const flags = score.data_quality_flags.length ? score.data_quality_flags.join(", ") : "없음";
+  const verdictLabel = VERDICT_LABELS[score.verdict] || score.verdict;
   el("eq-output").className = "";
   el("eq-output").innerHTML =
-    "<h3>" + esc(score.symbol) + " — 총점 " + esc(score.total_score) + "/100 (" + esc(score.verdict) + ")</h3>" +
+    "<h3>" + esc(score.symbol) + " — 총점 " + esc(score.total_score) + "/100 · " + esc(verdictLabel) + "</h3>" +
     "<p>매수 점수조건(≥80점) 충족: " + (score.buy_score_condition_met ? "예" : "아니오") +
     " · 데이터 품질 플래그: " + esc(flags) + "</p>" +
-    dcfHtml + rvHtml + table;
+    missingNote + dcfHtml + rvHtml + table;
 
   el("bg-total-score").value = score.total_score;
   const gapRatio = body.dcf && body.dcf.gap ? body.dcf.gap.gap_ratio : "";

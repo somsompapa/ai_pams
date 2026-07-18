@@ -206,11 +206,32 @@ class TestEquityScoreApi:
         assert roe_item["value"] == "0.1322"
         assert body["growth_metrics"]["roe_latest"] == "0.1322"
 
-    def test_missing_shares_outstanding_degrades_dcf_to_error_not_crash(
+    def test_debt_ratio_auto_fills_from_financials_when_omitted(self, tmp_path: Path) -> None:
+        """debt_ratio를 요청에서 생략하면 이미 조회된 total_debt/total_equity로
+        자동 계산한 값을 써야 한다 — 수동 입력만 받아 '데이터 누락 0점' 처리하지 않는다."""
+        annual = (
+            AnnualFinancials(fiscal_year=2025, total_debt=Decimal(600), total_equity=Decimal(400)),
+        )
+        provider = _FakeProvider(
+            AnnualFinancialsResult(asset_id="TEST", data_source="fake", annual=annual)
+        )
+        client = _client(tmp_path, provider)
+        payload = {**_BASE_PAYLOAD, "debt_ratio": None}
+        response = client.post("/api/equity-score", json=payload)
+        assert response.status_code == 200
+        body = response.json()
+
+        fin = next(c for c in body["score"]["categories"] if c["category"] == "재무")
+        debt_item = next(i for i in fin["items"] if i["metric"] == "부채비율(총부채기준)")
+        assert debt_item["value"] == "1.5000"
+        assert body["growth_metrics"]["debt_ratio_latest"] == "1.5000"
+
+    def test_missing_shares_outstanding_keeps_enterprise_value_drops_per_share_only(
         self, tmp_path: Path
     ) -> None:
-        """shares_outstanding 없이는 주당 적정가·트리거 구간을 계산할 수 없다 — 서버가
-        500으로 죽지 않고 dcf.error로 사유를 반환해야 한다(기업가치 자체는 유효할 수 있음)."""
+        """shares_outstanding 없이는 주당 적정가·트리거 구간을 계산할 수 없지만,
+        기업가치·자기자본가치는 발행주식수와 무관하게 유효하다 — 이것까지 통째로
+        버리면(dcf.error) '데이터가 없어서 이 도구가 의미없다'는 오해를 만든다."""
         provider = _FakeProvider(
             AnnualFinancialsResult(
                 asset_id="TEST", data_source="fake", annual=_NON_FINANCIAL_ANNUAL
@@ -220,7 +241,13 @@ class TestEquityScoreApi:
         payload = {**_BASE_PAYLOAD, "shares_outstanding": None}
         response = client.post("/api/equity-score", json=payload)
         assert response.status_code == 200
-        assert "error" in response.json()["dcf"]
+        dcf = response.json()["dcf"]
+        assert "error" not in dcf
+        assert dcf["enterprise_value"] is not None
+        assert dcf["equity_value"] is not None
+        assert dcf["fair_value_per_share"] is None
+        assert dcf["trigger_zones"] is None
+        assert dcf["trigger_zones_unavailable_reason"] is not None
 
     def test_missing_base_fcf_skips_dcf_but_still_scores(self, tmp_path: Path) -> None:
         annual = (AnnualFinancials(fiscal_year=2025, revenue=Decimal(1000)),)

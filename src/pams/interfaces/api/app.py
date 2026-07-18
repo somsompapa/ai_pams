@@ -434,6 +434,7 @@ def _serialize_annual_financials(row: AnnualFinancials) -> dict[str, Any]:
         "operating_income": str(row.operating_income) if row.operating_income is not None else None,
         "net_income": str(row.net_income) if row.net_income is not None else None,
         "eps": str(row.eps) if row.eps is not None else None,
+        "eps_derived": row.eps_derived,
         "gross_profit": str(row.gross_profit) if row.gross_profit is not None else None,
         "total_assets": str(row.total_assets) if row.total_assets is not None else None,
         "total_equity": str(row.total_equity) if row.total_equity is not None else None,

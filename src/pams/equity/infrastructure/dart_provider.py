@@ -253,13 +253,28 @@ class DartFinancialStatementProvider:
 
             shares_outstanding = self._fetch_shares_outstanding(corp_code, year)
 
+            eps = values["eps"]
+            eps_derived = False
+            if (
+                eps is None
+                and values["net_income"] is not None
+                and shares_outstanding is not None
+                and shares_outstanding > 0
+            ):
+                # EPS 계정명 매칭 실패 시 순이익÷발행주식수로 역산(항등식 기반, 임의
+                # 추정 아님) — total_equity_derived와 같은 관례. 연결 순이익 전체를 쓰므로
+                # 지배주주 귀속 순이익 기준 공시 EPS와는 소폭 다를 수 있다(eps_derived로 표시).
+                eps = values["net_income"] / shares_outstanding
+                eps_derived = True
+
             rows.append(
                 AnnualFinancials(
                     fiscal_year=year,
                     revenue=values["revenue"],
                     operating_income=values["operating_income"],
                     net_income=values["net_income"],
-                    eps=values["eps"],
+                    eps=eps,
+                    eps_derived=eps_derived,
                     gross_profit=values["gross_profit"],
                     total_assets=values["total_assets"],
                     total_equity=total_equity,

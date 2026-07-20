@@ -15,8 +15,8 @@ from decimal import Decimal, InvalidOperation
 
 import httpx
 
-from pams.market_data.domain import MarketDataProviderError, Quote
-from pams.shared_kernel.domain import Currency
+from pams.market_data.domain import DailyBar, MarketDataProviderError, Quote
+from pams.shared_kernel.domain import Currency, DomainValidationError
 
 _BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
 _USER_AGENT = "Mozilla/5.0 (compatible; PAMS/0.1)"
@@ -80,3 +80,92 @@ class YahooQuoteProvider:
             return Quote(symbol=symbol, quote_date=quote_date, close=close, currency=currency)
         except Exception as error:  # 도메인 검증 실패(음수 등)
             raise MarketDataProviderError(f"{symbol}: {error}") from error
+
+    def historical_quotes(self, symbol: str, *, years: int = 5) -> tuple[Quote, ...]:
+        """PER/PBR 5년밴드 계산 전용 — 월 단위(1mo)로 근사해 조회한다(일 단위 전체
+        이력은 결산연도별 매칭에 필요 이상으로 무겁다). 실패해도 예외를 던지지
+        않는다 — 빈 튜플이면 밴드 계산만 생략된다(임의 대체 금지)."""
+        url = f"{_BASE_URL}/{symbol}"
+        try:
+            with httpx.Client(transport=self.transport, timeout=self.timeout_seconds) as client:
+                response = client.get(
+                    url,
+                    params={"interval": "1mo", "range": f"{years}y"},
+                    headers={"User-Agent": _USER_AGENT},
+                )
+        except httpx.HTTPError:
+            return ()
+        if response.status_code >= 400:
+            return ()
+        try:
+            result = response.json()["chart"]["result"]
+        except (KeyError, TypeError, ValueError):
+            return ()
+        if not result:
+            return ()
+
+        raw_currency = result[0].get("meta", {}).get("currency")
+        try:
+            currency = Currency(str(raw_currency))
+        except ValueError:
+            return ()
+
+        timestamps = result[0].get("timestamp") or []
+        quote_blocks = result[0].get("indicators", {}).get("quote") or [{}]
+        closes = quote_blocks[0].get("close") or []
+
+        points: list[Quote] = []
+        for epoch, close in zip(timestamps, closes, strict=False):
+            if close is None:
+                continue
+            try:
+                price_date = datetime.fromtimestamp(int(epoch), tz=UTC).date()
+                decimal_close = Decimal(str(close))
+                points.append(
+                    Quote(
+                        symbol=symbol, quote_date=price_date, close=decimal_close, currency=currency
+                    )
+                )
+            except (InvalidOperation, ValueError, OSError, DomainValidationError):
+                continue
+        return tuple(points)
+
+    def recent_daily_bars(self, symbol: str, *, days: int = 20) -> tuple[DailyBar, ...]:
+        """유동성 스크리닝(P-5, 최근 20영업일 평균 거래대금) 전용 — 일 단위 종가·
+        거래량 조회. 실패해도 예외를 던지지 않는다(빈 튜플이면 유동성 확인만 생략)."""
+        url = f"{_BASE_URL}/{symbol}"
+        try:
+            with httpx.Client(transport=self.transport, timeout=self.timeout_seconds) as client:
+                response = client.get(
+                    url,
+                    params={"interval": "1d", "range": "2mo"},
+                    headers={"User-Agent": _USER_AGENT},
+                )
+        except httpx.HTTPError:
+            return ()
+        if response.status_code >= 400:
+            return ()
+        try:
+            result = response.json()["chart"]["result"]
+        except (KeyError, TypeError, ValueError):
+            return ()
+        if not result:
+            return ()
+
+        timestamps = result[0].get("timestamp") or []
+        quote_blocks = result[0].get("indicators", {}).get("quote") or [{}]
+        closes = quote_blocks[0].get("close") or []
+        volumes = quote_blocks[0].get("volume") or []
+
+        bars: list[DailyBar] = []
+        for epoch, close, volume in zip(timestamps, closes, volumes, strict=False):
+            if close is None or volume is None:
+                continue
+            try:
+                bar_date = datetime.fromtimestamp(int(epoch), tz=UTC).date()
+                bars.append(
+                    DailyBar(quote_date=bar_date, close=Decimal(str(close)), volume=int(volume))
+                )
+            except (InvalidOperation, ValueError, OSError):
+                continue
+        return tuple(bars[-days:])

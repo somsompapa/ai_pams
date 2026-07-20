@@ -114,6 +114,33 @@ class TestDeleteAsset:
             delete_asset(path, "NOPE")
 
 
+class TestExceptionalQualityReason:
+    def test_round_trips_through_yaml(self, tmp_path: Path) -> None:
+        path = write(tmp_path, VALID)
+        append_asset(
+            path,
+            Asset(
+                asset_id="NASDAQ:NVDA",
+                name="엔비디아",
+                asset_class=AssetClass.US_STOCK,
+                currency=Currency.USD,
+                country="US",
+                exceptional_quality_reason="기업 점수 90+ 3분기 연속 유지",
+            ),
+        )
+        catalog = YamlAssetCatalog(path)
+        nvda = catalog.get("NASDAQ:NVDA")
+        assert nvda is not None
+        assert nvda.exceptional_quality_reason == "기업 점수 90+ 3분기 연속 유지"
+        assert nvda.is_exceptional_quality is True
+
+    def test_absent_when_not_set(self, tmp_path: Path) -> None:
+        catalog = YamlAssetCatalog(write(tmp_path, VALID))
+        samsung = catalog.get("KRX:005930")
+        assert samsung is not None
+        assert samsung.exceptional_quality_reason is None
+
+
 class TestAppendAsset:
     def test_appends_new_entry(self, tmp_path: Path) -> None:
         path = write(tmp_path, VALID)

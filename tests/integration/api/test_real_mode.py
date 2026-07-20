@@ -409,6 +409,93 @@ class TestAssetAndTriggerEntry:
         assert resp.status_code == 400
 
 
+class TestBulkImportAssets:
+    def _client(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        monkeypatch.setenv("PAMS_MODE", "real")
+        recorder = real_valuation_recorder(project_root)
+        for day in (date(2026, 7, 8), date(2026, 7, 9), AS_OF):
+            recorder.execute(as_of=day, base_currency=Currency.KRW)
+        service = real_dashboard_service(project_root)
+        return TestClient(
+            create_app(service, data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+
+    def test_all_rows_valid_creates_every_asset(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        csv_text = (
+            "asset_id,name,asset_class,currency,country,sector,yahoo_symbol,"
+            "exceptional_quality_reason\n"
+            "NASDAQ:MSFT,마이크로소프트,us_stock,USD,US,Information Technology,MSFT,\n"
+            "NASDAQ:GOOGL,알파벳,us_stock,USD,US,Communication Services,GOOGL,\n"
+        )
+        resp = client.post("/api/assets/bulk-import", json={"csv_text": csv_text})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["created_count"] == 2
+        assert body["error_count"] == 0
+        assert set(body["created"]) == {"NASDAQ:MSFT", "NASDAQ:GOOGL"}
+        assets_yaml = (project_root / "config" / "assets" / "default.yaml").read_text("utf-8")
+        assert "NASDAQ:MSFT" in assets_yaml and "NASDAQ:GOOGL" in assets_yaml
+        symbols_yaml = (project_root / "config" / "market" / "symbols.yaml").read_text("utf-8")
+        assert "MSFT" in symbols_yaml and "GOOGL" in symbols_yaml
+
+    def test_one_bad_row_does_not_block_the_rest(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """한 행이 실패해도(여기서는 이미 존재하는 종목) 나머지 행은 계속 등록돼야
+        한다 — 부분 실패를 허용해 CSV 전체를 되돌리지 않는다."""
+        client = self._client(project_root, monkeypatch)
+        csv_text = (
+            "asset_id,name,asset_class,currency,country\n"
+            "KRX:005930,삼성전자,domestic_stock,KRW,KR\n"  # 이미 등록된 종목(중복)
+            "NASDAQ:AMZN,아마존,us_stock,USD,US\n"
+        )
+        resp = client.post("/api/assets/bulk-import", json={"csv_text": csv_text})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["created"] == ["NASDAQ:AMZN"]
+        assert body["error_count"] == 1
+        assert body["errors"][0]["row"] == 2
+        assert body["errors"][0]["asset_id"] == "KRX:005930"
+
+    def test_missing_required_column_rejected(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        csv_text = "asset_id,name\nNASDAQ:AMZN,아마존\n"
+        resp = client.post("/api/assets/bulk-import", json={"csv_text": csv_text})
+        assert resp.status_code == 400
+
+    def test_unknown_asset_class_recorded_as_row_error(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = self._client(project_root, monkeypatch)
+        csv_text = "asset_id,name,asset_class,currency,country\nNASDAQ:X,엑스,meme_stock,USD,US\n"
+        resp = client.post("/api/assets/bulk-import", json={"csv_text": csv_text})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["created_count"] == 0
+        assert body["error_count"] == 1
+        assert (
+            "meme_stock" in body["errors"][0]["reason"] or "자산군" in body["errors"][0]["reason"]
+        )
+
+    def test_demo_mode_blocks_bulk_import(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PAMS_MODE", "demo")
+        client = TestClient(
+            create_app(data_dir=project_root / "data", as_of_provider=lambda: AS_OF)
+        )
+        resp = client.post(
+            "/api/assets/bulk-import",
+            json={"csv_text": "asset_id,name,asset_class,currency,country\n"},
+        )
+        assert resp.status_code == 400
+
+
 class TestBulkTriggers:
     def _client(self, project_root: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         monkeypatch.setenv("PAMS_MODE", "real")

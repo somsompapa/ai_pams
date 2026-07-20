@@ -43,6 +43,33 @@ class QuoteProvider(Protocol):
         ...
 
 
+@runtime_checkable
+class HistoricalQuoteProvider(Protocol):
+    def historical_quotes(self, symbol: str, *, years: int = 5) -> tuple[Quote, ...]:
+        """symbol의 과거 종가 시계열(오래된→최신), 월 단위 근사. 조회 실패·데이터
+        없음이면 빈 튜플(예외 아님) — PER/PBR 밴드 계산이 부분 데이터로도 시도될 수
+        있게 한다. 선택 기능이므로 모든 QuoteProvider 구현체가 지원할 필요는 없다."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class DailyBar:
+    """특정 일자의 종가·거래량. 유동성 스크리닝(P-5, 최근 20영업일 평균 거래대금)
+    전용 — Quote와 달리 volume을 갖는다."""
+
+    quote_date: date
+    close: Decimal
+    volume: int
+
+
+@runtime_checkable
+class DailyVolumeProvider(Protocol):
+    def recent_daily_bars(self, symbol: str, *, days: int = 20) -> tuple[DailyBar, ...]:
+        """symbol의 최근 거래일별 종가·거래량(오래된→최신, 최대 days개). 조회 실패면
+        빈 튜플(예외 아님) — 유동성 확인은 참고용 판단 보조일 뿐 자동 차단이 아니다."""
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class SymbolMap:
     """asset_id/통화쌍/지표 → 외부 심볼 매핑. config/market/symbols.yaml에서 로드."""

@@ -1,0 +1,56 @@
+# 시장 국면(4장 A~E) 판정 설정. market_analysis_rules.md 4-1 표를 그대로 데이터로 옮긴 것 —
+# CLAUDE.md 절대원칙 #2(투자 규칙은 코드에 하드코딩하지 않는다)를 따른다.
+#
+# grade: A(강세)~E(위기). rank: 0(A)~4(E), 참고용 서수(판정 로직에는 쓰이지 않음).
+# 임계값은 초기값이며 분기별로 재검토한다(변경 시 CHANGELOG.md에 기록).
+
+min_indicators_required: 3
+
+indicators:
+  vix:
+    source: "yfinance ^VIX"
+    direction: lower_is_better # 값이 작을수록 좋음(bound는 상한/이하)
+    bands:
+      - { bound: 15, grade: A, rank: 0, basis: "<15" }
+      - { bound: 20, grade: B, rank: 1, basis: "15~20" }
+      - { bound: 25, grade: C, rank: 2, basis: "20~25" }
+      - { bound: 35, grade: D, rank: 3, basis: "25~35" }
+      - { bound: "Infinity", grade: E, rank: 4, basis: ">35" }
+
+  circuit_breaker:
+    # KOSPI 전일 대비 등락률(%). data_loader.is_circuit_breaker() 파생 로직 이식:
+    # 급락이 없으면 A/B가 아니라 C(중립)로 판정한다(v1.1 버그 수정 — "없음"이 상시
+    # 강세표로 집계되는 편향을 막는다). A/B 구간은 존재하지 않는다(표에 정의 없음).
+    source: "KOSPI 등락률 파생(is_circuit_breaker)"
+    direction: higher_is_better # 값이 클수록(덜 하락) 좋음(bound는 하한/이상)
+    bands:
+      - { bound: -5.0, grade: C, rank: 2, basis: "급락 없음(중립)" }
+      - { bound: -8.0, grade: D, rank: 3, basis: "-5%~-8% 미만 단일일 하락" }
+      - { bound: "-Infinity", grade: E, rank: 4, basis: "-8% 이상 단일일 하락(서킷브레이커 1단계)" }
+
+  treasury_10y:
+    source: "yfinance/수동"
+    options:
+      stable_or_down: { grade: A, rank: 0, basis: "안정/하락" }
+      mild_up: { grade: B, rank: 1, basis: "완만 상승" }
+      flat: { grade: C, rank: 2, basis: "횡보" }
+      spike: { grade: D, rank: 3, basis: "급등(+30bp↑)" }
+      spike_continued: { grade: E, rank: 4, basis: "급등 지속" }
+
+  sp500_per:
+    source: "yfinance 근사/수동"
+    options:
+      lower_mid: { grade: A, rank: 0, basis: "밴드 하단~중단" }
+      mid: { grade: B, rank: 1, basis: "중단" }
+      upper_mid: { grade: C, rank: 2, basis: "중상단" }
+      near_upper: { grade: D, rank: 3, basis: "상단 근접" }
+      above_upper: { grade: E, rank: 4, basis: "상단 초과" }
+
+  kospi_foreign_flow:
+    source: "수동/대화 검색(20일 누적)"
+    options:
+      net_buy: { grade: A, rank: 0, basis: "순매수 지속" }
+      turning_buy: { grade: B, rank: 1, basis: "순매수 전환" }
+      mixed: { grade: C, rank: 2, basis: "혼조" }
+      turning_sell: { grade: D, rank: 3, basis: "순매도 전환" }
+      heavy_sell: { grade: E, rank: 4, basis: "대량 순매도" }

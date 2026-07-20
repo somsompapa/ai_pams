@@ -1,0 +1,143 @@
+"""연간 재무제표 시계열 → 성장성/수익성 지표(3Y CAGR, FCF 흑자연도, ROA) 계산.
+
+ai_stock 프로젝트 data_loader.compute_growth_metrics()의 검증된 로직을 이식.
+CAGR은 Decimal의 ln()/exp()로 계산한다(risk/domain/measures.py의 cagr()과 동일 관례 —
+Decimal은 분수 지수의 **를 직접 지원하지 않는다).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from decimal import Decimal
+
+from pams.equity.domain.financial_statement import AnnualFinancials
+
+_THREE_YEARS = Decimal(3)
+
+
+@dataclass(frozen=True, slots=True)
+class GrowthMetrics:
+    revenue_cagr_3y: Decimal | None
+    revenue_cagr_3y_note: str | None
+    eps_cagr_3y: Decimal | None
+    eps_cagr_3y_note: str | None
+    total_assets_cagr_3y: Decimal | None
+    total_assets_cagr_3y_note: str | None
+    fcf_positive_years: int | None
+    fcf_positive_years_note: str | None
+    gross_margin_latest: Decimal | None
+    roa_latest: Decimal | None
+    roe_latest: Decimal | None
+    debt_ratio_latest: Decimal | None
+    roic_latest: Decimal | None
+    operating_margin_latest: Decimal | None
+
+
+def _cagr_3y(
+    annual_sorted: tuple[AnnualFinancials, ...],
+    label: str,
+    getter: Callable[[AnnualFinancials], Decimal | None],
+) -> tuple[Decimal | None, str | None]:
+    if len(annual_sorted) < 4:  # t-3~t, 4개 데이터포인트 필요(3년 CAGR)
+        return (
+            None,
+            f"{label} 3Y CAGR 계산 불가 — 최소 4개년(t-3~t) 데이터 필요, "
+            f"현재 {len(annual_sorted)}개년",
+        )
+    begin = getter(annual_sorted[-4])
+    end = getter(annual_sorted[-1])
+    if begin is None or end is None or begin <= 0:
+        return None, f"{label} 3Y CAGR 계산 불가 — 기초/기말 값 누락 또는 기초값 0 이하"
+    if end <= 0:
+        # growth = end/begin이 0 이하면 ln()이 정의되지 않는다(적자 전환 등). 음(-)의
+        # 성장률을 임의로 지어내는 대신 계산 불가로 명시한다(임의추정 금지 원칙).
+        return None, f"{label} 3Y CAGR 계산 불가 — 기말 값이 0 이하(적자/역성장 전환)"
+    growth = end / begin
+    return (growth.ln() / _THREE_YEARS).exp() - 1, None
+
+
+def compute_growth_metrics(annual: tuple[AnnualFinancials, ...]) -> GrowthMetrics:
+    """연도별 재무(annual, 순서 무관 — 내부에서 fiscal_year 오름차순 정렬)로부터
+    3장 채점용 지표를 계산한다. 데이터가 부족하거나 값이 없으면 None + 사유를 반환한다
+    (0으로 조용히 채우지 않는다 — data_loader.py 설계 원칙 그대로)."""
+    sorted_annual = tuple(sorted(annual, key=lambda a: a.fiscal_year))
+
+    revenue_cagr, revenue_note = _cagr_3y(sorted_annual, "매출", lambda a: a.revenue)
+    eps_cagr, eps_note = _cagr_3y(sorted_annual, "EPS", lambda a: a.eps)
+    assets_cagr, assets_note = _cagr_3y(sorted_annual, "총자산", lambda a: a.total_assets)
+
+    recent3 = sorted_annual[-3:]
+    fcf_years: int | None
+    fcf_note: str | None
+    if len(recent3) < 3:
+        fcf_years, fcf_note = None, f"최근 3개년 데이터 부족(현재 {len(recent3)}개년) — 판단 보류"
+    else:
+        fcfs = [a.fcf for a in recent3]
+        if any(v is None for v in fcfs):
+            fcf_years, fcf_note = None, "일부 연도 FCF 값 누락 — 임의 추정 금지, 판단 보류"
+        else:
+            fcf_years = sum(1 for v in fcfs if v is not None and v > 0)
+            fcf_note = None
+
+    gross_margin: Decimal | None = None
+    roa: Decimal | None = None
+    roe: Decimal | None = None
+    debt_ratio: Decimal | None = None
+    roic: Decimal | None = None
+    operating_margin: Decimal | None = None
+    if sorted_annual:
+        last = sorted_annual[-1]
+        if last.revenue is not None and last.revenue > 0 and last.gross_profit is not None:
+            gross_margin = last.gross_profit / last.revenue
+        if last.revenue is not None and last.revenue > 0 and last.operating_income is not None:
+            operating_margin = last.operating_income / last.revenue
+        if last.total_assets is not None and last.total_assets > 0 and last.net_income is not None:
+            roa = last.net_income / last.total_assets
+        # ROE 분모는 반드시 controlling_interest_equity(지배주주지분)를 쓴다.
+        # total_equity(총자본, 비지배지분 포함)를 쓰면 ROE가 실제보다 낮게 왜곡된다
+        # (실측: 신한지주 total_equity 60.37조 vs 지배주주지분 38.45조).
+        if (
+            last.controlling_interest_equity is not None
+            and last.controlling_interest_equity > 0
+            and last.net_income is not None
+        ):
+            roe = last.net_income / last.controlling_interest_equity
+        # 부채비율 v1.4 정의(company_analysis_rules.md 3-3): 총부채/자기자본.
+        # total_debt·total_equity 모두 이미 조회된 값이므로 수동 입력 없이도 계산 가능하다.
+        if last.total_debt is not None and last.total_equity is not None and last.total_equity > 0:
+            debt_ratio = last.total_debt / last.total_equity
+        # ROIC = NOPAT / Invested Capital. NOPAT = 영업이익×(1-유효세율), 유효세율은
+        # 법인세비용÷세전이익(=순이익+법인세비용)의 항등식으로 구한다(세율을 임의로
+        # 가정하지 않는다 — 임의추정 금지). Invested Capital = 총부채+자기자본-현금.
+        if (
+            last.operating_income is not None
+            and last.income_tax_expense is not None
+            and last.net_income is not None
+            and last.total_debt is not None
+            and last.total_equity is not None
+            and last.cash is not None
+        ):
+            pretax_income = last.net_income + last.income_tax_expense
+            invested_capital = last.total_debt + last.total_equity - last.cash
+            if pretax_income > 0 and invested_capital > 0:
+                effective_tax_rate = last.income_tax_expense / pretax_income
+                nopat = last.operating_income * (1 - effective_tax_rate)
+                roic = nopat / invested_capital
+
+    return GrowthMetrics(
+        revenue_cagr_3y=revenue_cagr,
+        revenue_cagr_3y_note=revenue_note,
+        eps_cagr_3y=eps_cagr,
+        eps_cagr_3y_note=eps_note,
+        total_assets_cagr_3y=assets_cagr,
+        total_assets_cagr_3y_note=assets_note,
+        fcf_positive_years=fcf_years,
+        fcf_positive_years_note=fcf_note,
+        gross_margin_latest=gross_margin,
+        roa_latest=roa,
+        roe_latest=roe,
+        debt_ratio_latest=debt_ratio,
+        roic_latest=roic,
+        operating_margin_latest=operating_margin,
+    )

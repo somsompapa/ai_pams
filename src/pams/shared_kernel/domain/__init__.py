@@ -3,6 +3,13 @@
 from pams.shared_kernel.domain.allocation import AllocationTarget
 from pams.shared_kernel.domain.asset import Asset
 from pams.shared_kernel.domain.asset_class import AssetClass
+from pams.shared_kernel.domain.band_table import (
+    Band,
+    BandDirection,
+    BandTable,
+    CategoricalOption,
+    CategoricalTable,
+)
 from pams.shared_kernel.domain.currency import Currency
 from pams.shared_kernel.domain.errors import (
     CurrencyMismatchError,
@@ -17,6 +24,11 @@ __all__ = [
     "AllocationTarget",
     "Asset",
     "AssetClass",
+    "Band",
+    "BandDirection",
+    "BandTable",
+    "CategoricalOption",
+    "CategoricalTable",
     "Currency",
     "CurrencyMismatchError",
     "DomainError",

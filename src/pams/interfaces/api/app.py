@@ -11,6 +11,8 @@ AI 해설은 TextCompletion 구현이 있어야 동작한다:
 from __future__ import annotations
 
 import base64
+import csv
+import io
 import os
 import secrets
 import uuid
@@ -41,10 +43,46 @@ from pams.asset.infrastructure import (
 from pams.audit.application import RecordAuditEvent
 from pams.audit.domain import AuditEvent
 from pams.audit.infrastructure import JsonlAuditTrail
-from pams.equity.domain import PriceTrigger, StockTarget, band_trigger
+from pams.equity.application import (
+    CalculateDcf,
+    CalculateRelativeValuation,
+    CompareIndustryPeers,
+    LoadGrowthMetrics,
+    ScoreCompany,
+)
+from pams.equity.domain import (
+    CompanyScoreInputs,
+    DcfAssumptions,
+    PriceTrigger,
+    RiskDeduction,
+    ScoreItemSnapshot,
+    ScoreSnapshot,
+    StockTarget,
+    TranchePlan,
+    ValuationError,
+    band_trigger,
+    compute_price_band,
+    evaluate_buy_gate,
+    evaluate_liquidity,
+    evaluate_sell_review,
+    evaluate_tranche,
+)
+from pams.equity.domain.financial_statement import (
+    AnnualFinancials,
+    AnnualFinancialsResult,
+    FinancialStatementProvider,
+    FinancialStatementProviderError,
+)
+from pams.equity.domain.score import CategoryScore, CompanyScoreReport, ScoreItem
 from pams.equity.infrastructure import (
+    DartFinancialStatementProvider,
+    JsonIndustryClassificationRepository,
+    JsonTranchePlanRepository,
     PriceTriggerConfigError,
+    ScoringConfigError,
+    SecEdgarFinancialStatementProvider,
     StockTargetConfigError,
+    YamlScoringConfigLoader,
     YamlStockTargetLoader,
     delete_price_trigger,
     delete_stock_target,
@@ -56,7 +94,28 @@ from pams.interfaces.api.service import DashboardService
 from pams.journal.application import ListJournalEntries, RecordJournalEntry
 from pams.journal.domain import JournalEntry
 from pams.journal.infrastructure import JsonlJournalRepository
-from pams.market_data.infrastructure import CsvPriceLookup, upsert_fx_rate, upsert_price_symbol
+from pams.market_data.domain import (
+    DailyBar,
+    DailyVolumeProvider,
+    HistoricalQuoteProvider,
+    MarketDataProviderError,
+    Quote,
+    QuoteProvider,
+)
+from pams.market_data.infrastructure import (
+    CsvPriceLookup,
+    YahooQuoteProvider,
+    upsert_fx_rate,
+    upsert_price_symbol,
+)
+from pams.market_regime.application import GradeMarketRegime
+from pams.market_regime.domain import Grade, MarketIndicatorProvider, MarketRegimeProviderError
+from pams.market_regime.infrastructure import (
+    RegimeConfigError,
+    YahooMarketRegimeIndicatorProvider,
+    YamlMarketRegimeConfigLoader,
+)
+from pams.performance.application import ComputeRealizedPerformance
 from pams.portfolio.domain import CashLedger, PositionLedger, Transaction, TransactionType
 from pams.portfolio.infrastructure import CsvDataError, CsvTransactionRepository
 from pams.shared_kernel.domain import (
@@ -89,6 +148,173 @@ class AnalysisRequest(BaseModel):
     asset_id: str | None = None  # kind == stock_trigger일 때 필수
 
 
+class RiskDeductionInput(BaseModel):
+    """company_analysis_rules.md 3-5 리스크 감점 항목. reason은 정의된 4종 중 하나여야
+    캡이 정상 적용된다(규제 리스크 확대/경쟁 심화 신호/경기민감업종 & 경기 후행국면/
+    경영진 리스크 이슈)."""
+
+    reason: str
+    points: str
+    basis: str = ""
+
+
+class EquityScoreRequest(BaseModel):
+    """종목 100점 스코어링 + DCF 요청. company_analysis_rules.md 3장 구현(equity.domain).
+
+    숫자는 float 오차를 막기 위해 문자열로 받는다. DCF 가정과 정성 판단 항목(시장점유율
+    추이·진입장벽·WACC 근거 등)은 사람이 입력해야 한다 — 임의 추정 금지 원칙은 여기서도
+    동일하게 적용된다(계산 불가 항목은 서버가 0점+사유로 처리, 서버가 값을 지어내지 않음).
+    """
+
+    asset_id: str
+    market: Literal["US", "KR"]
+    is_financial: bool = False
+    years: int = 4
+
+    # DCF 가정 (기준 FCF는 조회된 재무제표 최신연도에서 자동 채움 — 미확보 시 DCF 생략)
+    wacc: str
+    terminal_growth: str
+    # 비워두면(None) 매출 3Y CAGR(금융업은 총자산 3Y CAGR)에서 영구성장률까지 선형으로
+    # 체감하는 경로를 자동 산출한다 — 과거 실측 성장률 기반이라 임의추정이 아니다.
+    growth_path: list[str] | None = None
+    # 비워두면(None) 이미 조회된 총부채-현금으로 자동 계산한다.
+    net_debt: str | None = None
+    shares_outstanding: str | None = None
+    current_price: str | None = None
+    wacc_basis: str = ""
+
+    # 3-4 밸류에이션 상대지표(PER/PBR/PEG) — DCF 교차검증 보조, 절대 기준 아님.
+    # 백분위는 해당 종목 자신의 과거 5년 PER/PBR 밴드 내 위치(0~1, 업종 평균 아님).
+    per_band_percentile: str | None = None
+    pbr_band_percentile: str | None = None
+    peg: str | None = None
+
+    # 3-1 성장성 (매출/총자산 CAGR·EPS CAGR·FCF흑자연도는 조회된 재무제표로 자동 계산)
+    industry_tam_cagr: str | None = None
+
+    # 3-2 경쟁력
+    market_share_trend: Literal["up", "flat", "down"] | None = None
+    gross_margin_vs_industry_pp: str | None = None  # 비금융업
+    roa_vs_industry_pp: str | None = None  # 금융업(is_financial=True) 대체지표
+    entry_barrier_regulatory: bool = False
+    entry_barrier_capital_intensity: Literal["none", "normal", "extreme"] = "none"
+    entry_barrier_network_effect: bool = False
+    entry_barrier_basis: str = ""
+
+    # 3-3 재무
+    roe: str | None = None
+    roic: str | None = None
+    op_margin_industry_rank: Literal["top30", "mid", "bottom"] | None = None
+    debt_ratio: str | None = None  # 비금융업만(금융업은 예외 처리, company_analysis_rules.md 3-3)
+
+    # 3-5 리스크
+    risk_deductions: list[RiskDeductionInput] = []
+
+
+class MarketRegimeRequest(BaseModel):
+    """시장 국면(4장 A~E) 판정 요청. market_analysis_rules.md 4장 구현(market_regime.domain).
+
+    5개 지표 중 일부만 입력해도 판정은 시도한다(3개 미만이면 '판단 보류'로 응답) —
+    자동조회 대상이 아닌 지표(10년물·PER·외국인수급)는 항상 사람이 범주를 골라 입력한다.
+    """
+
+    vix: str | None = None
+    circuit_breaker: str | None = None  # KOSPI 전일 대비 등락률(%), 예: "-5.3"
+    treasury_10y: (
+        Literal["stable_or_down", "mild_up", "flat", "spike", "spike_continued"] | None
+    ) = None
+    sp500_per: Literal["lower_mid", "mid", "upper_mid", "near_upper", "above_upper"] | None = None
+    kospi_foreign_flow: (
+        Literal["net_buy", "turning_buy", "mixed", "turning_sell", "heavy_sell"] | None
+    ) = None
+
+
+class BuyGateRequest(BaseModel):
+    """매수 필수조건(buy_rules.md B-1) AND 게이트 판정 요청.
+
+    /api/equity-score와 /api/market-regime 호출 결과를 클라이언트가 조립해 넘긴다
+    (equity와 market_regime은 서로 다른 컨텍스트라 서버가 자동으로 묶지 않는다 —
+    두 계산은 독립적으로 이미 끝난 상태에서, 이 엔드포인트는 4개 조건만 판정한다).
+    """
+
+    total_score: str  # 0~100, /api/equity-score의 score.total_score
+    dcf_gap_ratio: str | None = None  # /api/equity-score dcf.gap.gap_ratio
+    market_grade: Literal["A", "B", "C", "D", "E"] | None = None  # /api/market-regime final_grade
+    investment_thesis: str = ""
+    # 상대지표(PER/PBR/PEG, 0~10) — /api/equity-score의 relative_valuation.score.
+    # DCF는 조건3 충족인데 이 값이 낮으면(상단·richly-valued) 그 불일치를 고지한다
+    # (valuation_rules.md V-2, v1.6.1).
+    relative_valuation_score: str | None = None
+
+
+class LiquidityCheckRequest(BaseModel):
+    """유동성 스크리닝(portfolio_rules.md P-5, v1.6.1 신규) 요청 — buy_rules.md B-3
+    체크리스트가 참조하는 매수 전 참고용 확인. 최근 20영업일 평균 거래대금이 1차
+    매수 예정 금액의 최소 20배는 돼야 시장충격 없이 분할매수가 가능하다고 본다.
+    자동 차단이 아니다 — 미달이면 분할 횟수를 늘리거나 목표 수량을 줄이는 등
+    사용자 판단을 보조할 뿐이다.
+    """
+
+    asset_id: str
+    market: Literal["US", "KR"]
+    planned_first_tranche_amount: str
+
+
+class ScoreItemInput(BaseModel):
+    """/api/equity-score 응답의 score.categories[].items[] 원소를 그대로 받는다."""
+
+    metric: str
+    value: str
+    score: str
+
+
+class ScoreCategoryInput(BaseModel):
+    items: list[ScoreItemInput] = []
+
+
+class ScoreInput(BaseModel):
+    """/api/equity-score 응답의 score 객체를 그대로 넘긴다(client가 조립 —
+    buy-gate·sell-review와 동일한 원칙: 서로 다른 컨텍스트를 서버가 자동으로
+    묶지 않는다)."""
+
+    total_score: str
+    categories: list[ScoreCategoryInput] = []
+
+
+class CreateTranchePlanRequest(BaseModel):
+    """분할매수 계획 등록(buy_rules.md B-2 1차 매수 시). 1차 매수를 실제로
+    실행한 뒤, 그 시점의 매수가·목표수량·기업 점수 상세를 baseline으로 남긴다.
+    """
+
+    asset_id: str
+    first_tranche_price: str
+    target_quantity: str
+    baseline_score: ScoreInput
+
+
+class EvaluateTrancheRequest(BaseModel):
+    """분할매수 2차/3차 시점 판정 요청 — 가격 트리거 충족 여부와 점수 하락이
+    데이터 누락 때문인지 실제 논리훼손인지(v1.6.1) 함께 판정한다."""
+
+    current_price: str
+    current_score: ScoreInput
+
+
+class SellReviewRequest(BaseModel):
+    """매도 판단 보조(sell_rules.md 5장) 요청. 자동집행 아님 — 신호만 드러낸다.
+
+    S-1(논리훼손, OR): 성장 둔화·점유율 하락·산업구조 변화 중 하나라도 있으면 검토.
+    S-2(과대평가): /api/equity-score dcf.gap.gap_ratio를 그대로 넘기면 +50%/+100%
+    구간에 따라 25%/50% 부분매도를 제안한다.
+    """
+
+    revenue_yoy_growth_deceleration_pp: str | None = None  # 전년 대비 YoY 성장률 둔화폭
+    market_share_declining_two_quarters: bool = False
+    structural_disruption: bool = False
+    structural_disruption_note: str = ""
+    dcf_gap_ratio: str | None = None
+
+
 class TransactionRequest(BaseModel):
     """웹 거래 입력. 숫자는 float 오차를 막기 위해 문자열로 받는다."""
 
@@ -114,6 +340,16 @@ class AssetRequest(BaseModel):
     country: str
     sector: str | None = None
     yahoo_symbol: str | None = None
+    # portfolio_rules.md P-3 초우량 예외(단일종목 20%→30%). 임의 적용 금지 —
+    # 반드시 사유 문장과 함께 설정한다.
+    exceptional_quality_reason: str | None = None
+
+
+class BulkImportAssetsRequest(BaseModel):
+    """CSV 텍스트로 여러 종목을 한 번에 등록. 헤더: asset_id,name,asset_class,currency,
+    country,sector,yahoo_symbol,exceptional_quality_reason (뒤 3개는 선택)."""
+
+    csv_text: str
 
 
 class TriggerRequest(BaseModel):
@@ -267,6 +503,75 @@ def _facts_for_stock(data: dict[str, Any], asset_id: str) -> list[str]:
     ]
 
 
+def _serialize_annual_financials(row: AnnualFinancials) -> dict[str, Any]:
+    return {
+        "fiscal_year": row.fiscal_year,
+        "revenue": str(row.revenue) if row.revenue is not None else None,
+        "operating_income": str(row.operating_income) if row.operating_income is not None else None,
+        "net_income": str(row.net_income) if row.net_income is not None else None,
+        "eps": str(row.eps) if row.eps is not None else None,
+        "eps_derived": row.eps_derived,
+        "gross_profit": str(row.gross_profit) if row.gross_profit is not None else None,
+        "total_assets": str(row.total_assets) if row.total_assets is not None else None,
+        "total_equity": str(row.total_equity) if row.total_equity is not None else None,
+        "total_equity_derived": row.total_equity_derived,
+        "controlling_interest_equity": (
+            str(row.controlling_interest_equity)
+            if row.controlling_interest_equity is not None
+            else None
+        ),
+        "total_debt": str(row.total_debt) if row.total_debt is not None else None,
+        "cash": str(row.cash) if row.cash is not None else None,
+        "operating_cash_flow": (
+            str(row.operating_cash_flow) if row.operating_cash_flow is not None else None
+        ),
+        "capex": str(row.capex) if row.capex is not None else None,
+        "fcf": str(row.fcf) if row.fcf is not None else None,
+    }
+
+
+def _serialize_financials_result(result: AnnualFinancialsResult) -> dict[str, Any]:
+    return {
+        "asset_id": result.asset_id,
+        "data_source": result.data_source,
+        "annual": [_serialize_annual_financials(row) for row in result.annual],
+        "fetch_errors": list(result.fetch_errors),
+    }
+
+
+def _serialize_score_item(item: ScoreItem) -> dict[str, Any]:
+    return {
+        "metric": item.metric,
+        "value": item.value,
+        "bucket": item.bucket,
+        "score": str(item.score),
+        "max_score": str(item.max_score),
+        "note": item.note,
+    }
+
+
+def _serialize_category(category: CategoryScore) -> dict[str, Any]:
+    return {
+        "category": category.category,
+        "max_score": str(category.max_score),
+        "score": str(category.score),
+        "items": [_serialize_score_item(item) for item in category.items],
+    }
+
+
+def _serialize_score_report(report: CompanyScoreReport) -> dict[str, Any]:
+    return {
+        "symbol": report.symbol,
+        "as_of": report.as_of.isoformat(),
+        "data_source": report.data_source,
+        "total_score": str(report.total_score),
+        "verdict": report.verdict.value,
+        "buy_score_condition_met": report.buy_score_condition_met,
+        "categories": [_serialize_category(c) for c in report.categories],
+        "data_quality_flags": list(report.data_quality_flags),
+    }
+
+
 def _authorized(header: str | None, password: str) -> bool:
     if not header or not header.startswith("Basic "):
         return False
@@ -285,6 +590,9 @@ def create_app(
     completion: TextCompletion | None = None,
     as_of_provider: Callable[[], date] | None = None,
     password: str | None = None,
+    equity_providers: dict[str, FinancialStatementProvider] | None = None,
+    market_indicator_provider: MarketIndicatorProvider | None = None,
+    equity_price_provider: QuoteProvider | None = None,
 ) -> FastAPI:
     dashboard_service = service if service is not None else default_dashboard_service()
     as_of = as_of_provider if as_of_provider is not None else _default_as_of
@@ -294,6 +602,10 @@ def create_app(
     storage_dir = data_dir if data_dir is not None else _PROJECT_ROOT / "data"
     journal_repository = JsonlJournalRepository(storage_dir / "journal.jsonl")
     audit_recorder = RecordAuditEvent(trail=JsonlAuditTrail(storage_dir / "audit.jsonl"))
+    tranche_plan_repository = JsonTranchePlanRepository(storage_dir / "tranche_plans.json")
+    injected_equity_providers = equity_providers or {}
+    indicator_provider = market_indicator_provider or YahooMarketRegimeIndicatorProvider()
+    price_provider = equity_price_provider or YahooQuoteProvider()
     text_completion = completion if completion is not None else _completion_from_env()
 
     app = FastAPI(title="PAMS", version="0.1.0")
@@ -630,6 +942,11 @@ def create_app(
                 currency=Currency(request.currency),
                 country=request.country.strip(),
                 sector=(request.sector.strip() if request.sector else None),
+                exceptional_quality_reason=(
+                    request.exceptional_quality_reason.strip()
+                    if request.exceptional_quality_reason
+                    else None
+                ),
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=f"잘못된 자산군/통화: {error}") from None
@@ -647,6 +964,7 @@ def create_app(
                     "currency": a.currency.value,
                     "country": a.country,
                     "sector": a.sector or "",
+                    "exceptional_quality_reason": a.exceptional_quality_reason or "",
                 }
                 for a in sorted(assets, key=lambda a: a.asset_id)
             ]
@@ -674,6 +992,75 @@ def create_app(
             reason="웹 종목 추가",
         )
         return {"asset_id": asset.asset_id}
+
+    @app.post("/api/assets/bulk-import")
+    def bulk_import_assets(request: BulkImportAssetsRequest) -> dict[str, Any]:
+        """보유 종목이 많을 때 하나씩 등록하지 않아도 되도록 CSV로 일괄 등록한다.
+        한 행이 실패해도 나머지 행은 계속 처리한다(부분 실패 허용 — 실패 사유를 행 번호와
+        함께 반환, 이미 등록된 종목이 있다는 이유로 전체를 되돌리지 않는다)."""
+        _require_real_mode()
+        config_dir = dashboard_service.config_dir
+        try:
+            reader = csv.DictReader(io.StringIO(request.csv_text))
+        except csv.Error as error:
+            raise HTTPException(status_code=400, detail=f"CSV 파싱 실패: {error}") from None
+
+        required_columns = {"asset_id", "name", "asset_class", "currency", "country"}
+        header = set(reader.fieldnames or [])
+        missing_columns = required_columns - header
+        if missing_columns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"CSV 헤더에 필수 열이 없다: {', '.join(sorted(missing_columns))}",
+            )
+
+        created: list[str] = []
+        errors: list[dict[str, Any]] = []
+        for row_number, row in enumerate(reader, start=2):  # 1행은 헤더이므로 데이터는 2행부터
+            asset_id = (row.get("asset_id") or "").strip()
+            try:
+                if not asset_id:
+                    raise ValueError("asset_id가 비어 있다")
+                sector = (row.get("sector") or "").strip() or None
+                yahoo_symbol = (row.get("yahoo_symbol") or "").strip() or None
+                exceptional_reason = (row.get("exceptional_quality_reason") or "").strip() or None
+                asset_req = AssetRequest(
+                    asset_id=asset_id,
+                    name=(row.get("name") or "").strip(),
+                    asset_class=(row.get("asset_class") or "").strip(),
+                    currency=(row.get("currency") or "").strip(),
+                    country=(row.get("country") or "").strip(),
+                    sector=sector,
+                    yahoo_symbol=yahoo_symbol,
+                    exceptional_quality_reason=exceptional_reason,
+                )
+                asset = _build_asset(asset_id, asset_req)
+                append_asset(config_dir / "assets" / "default.yaml", asset)
+                if yahoo_symbol:
+                    upsert_price_symbol(
+                        config_dir / "market" / "symbols.yaml", asset_id, yahoo_symbol
+                    )
+                created.append(asset.asset_id)
+            except HTTPException as error:
+                errors.append(
+                    {"row": row_number, "asset_id": asset_id, "reason": str(error.detail)}
+                )
+            except (ValueError, AssetConfigError) as error:
+                errors.append({"row": row_number, "asset_id": asset_id, "reason": str(error)})
+
+        if created:
+            record_audit(
+                actor="user",
+                action="asset.bulk_imported",
+                detail=f"CSV 일괄 등록: {len(created)}건 성공, {len(errors)}건 실패",
+                reason="웹 CSV 업로드",
+            )
+        return {
+            "created": created,
+            "created_count": len(created),
+            "errors": errors,
+            "error_count": len(errors),
+        }
 
     @app.put("/api/assets/{asset_id}")
     def edit_asset(asset_id: str, request: AssetRequest) -> dict[str, Any]:
@@ -957,6 +1344,821 @@ def create_app(
             reason="사용자 요청",
         )
         return {"kind": narrative.kind.value, "text": narrative.text}
+
+    def _equity_financial_provider(market: str) -> FinancialStatementProvider:
+        injected = injected_equity_providers.get(market)
+        if injected is not None:
+            return injected
+        if market == "US":
+            contact = os.environ.get("SEC_EDGAR_CONTACT_EMAIL", "").strip()
+            return SecEdgarFinancialStatementProvider(contact_email=contact)
+        if market == "KR":
+            api_key = os.environ.get("DART_API_KEY", "").strip()
+            return DartFinancialStatementProvider(
+                api_key=api_key,
+                corp_code_cache_path=storage_dir / ".dart_corp_code_cache.xml",
+            )
+        raise HTTPException(status_code=400, detail=f"알 수 없는 market: {market}")
+
+    def _optional_decimal(label: str, value: str | None) -> Decimal | None:
+        if value is None or value.strip() == "":
+            return None
+        try:
+            return Decimal(value)
+        except InvalidOperation:
+            raise HTTPException(
+                status_code=400, detail=f"{label}: 숫자 형식 오류({value!r})"
+            ) from None
+
+    def _required_decimal(label: str, value: str) -> Decimal:
+        result = _optional_decimal(label, value)
+        if result is None:
+            raise HTTPException(status_code=400, detail=f"{label}: 필수 값이 비어 있다")
+        return result
+
+    def _money_str(value: Decimal) -> str:
+        """DCF 산출값(적정가·기업가치 등) 표시용 반올림(소수 2자리) — 계산은 원본
+        Decimal로 이미 끝난 뒤라 표시값 반올림이 정확도에 영향을 주지 않는다."""
+        return str(value.quantize(Decimal("0.01")))
+
+    def _ratio_str(value: Decimal | None) -> str | None:
+        """CAGR 등 비율 표시용 반올림(소수 4자리) — ln()/exp()로 계산돼 전체 정밀도를
+        그대로 노출하면 API 응답이 읽기 어렵다."""
+        return str(value.quantize(Decimal("0.0001"))) if value is not None else None
+
+    def _score_snapshot_from_input(score: ScoreInput) -> ScoreSnapshot:
+        """/api/equity-score 응답의 score 객체를 분할매수 판정용 스냅샷으로 바꾼다.
+        '데이터 누락' 여부는 scoring_engine._missing()이 항상 value="—"로 표시하는
+        기존 관례를 그대로 재사용한다(별도 boolean 필드를 새로 만들지 않는다)."""
+        items = tuple(
+            ScoreItemSnapshot(
+                metric=item.metric,
+                score=_required_decimal(f"score item '{item.metric}'", item.score),
+                missing=item.value == "—",
+            )
+            for category in score.categories
+            for item in category.items
+        )
+        return ScoreSnapshot(
+            total_score=_required_decimal("total_score", score.total_score), items=items
+        )
+
+    def _fetch_equity_price(asset_id: str, market: str) -> tuple[Decimal | None, str | None]:
+        """현재가 자동조회. 실패해도 예외를 던지지 않는다 — (값, 실패사유) 튜플로
+        돌려주고 값이 없으면 DCF 괴리율 계산만 생략한다(임의 대체 금지)."""
+        candidates = (asset_id,) if market == "US" else (f"{asset_id}.KS", f"{asset_id}.KQ")
+        errors: list[str] = []
+        for symbol in candidates:
+            try:
+                quote = price_provider.latest_quote(symbol)
+            except MarketDataProviderError as error:
+                errors.append(f"{symbol}: {error}")
+                continue
+            if quote is not None:
+                return quote.close, None
+            errors.append(f"{symbol}: 조회 결과 없음")
+        return None, f"현재가 자동조회 실패({'; '.join(errors)})"
+
+    def _fetch_historical_quotes(asset_id: str, market: str) -> tuple[Quote, ...]:
+        """PER/PBR 5년밴드 전용 과거 가격 조회. price_provider가 historical_quotes를
+        지원하지 않으면(선택 기능) 조용히 빈 튜플 — 예외를 던지지 않는다."""
+        if not isinstance(price_provider, HistoricalQuoteProvider):
+            return ()
+        candidates = (asset_id,) if market == "US" else (f"{asset_id}.KS", f"{asset_id}.KQ")
+        for symbol in candidates:
+            try:
+                points = price_provider.historical_quotes(symbol, years=5)
+            except MarketDataProviderError:
+                continue
+            if points:
+                return points
+        return ()
+
+    @app.post("/api/equity-score")
+    def compute_equity_score(request: EquityScoreRequest) -> dict[str, Any]:
+        """종목 100점 스코어링 + DCF (company_analysis_rules.md 3장, equity.domain).
+
+        재무제표(SEC/DART)는 자동 조회하고, 정성 판단 항목·DCF 가정은 요청 본문으로 받는다
+        — 계산 불가한 항목을 서버가 지어내지 않는다(임의 추정 금지).
+        """
+        provider = _equity_financial_provider(request.market)
+        # PER/PBR 5년밴드 백분위 자동산출을 위해 최소 5개년은 확보한다(요청이 더
+        # 많이 지정했으면 그대로 존중).
+        try:
+            growth_report = LoadGrowthMetrics(provider=provider).execute(
+                request.asset_id, years=max(request.years, 5)
+            )
+        except FinancialStatementProviderError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
+        metrics = growth_report.metrics
+        annual = growth_report.financials.annual
+        base_fcf = annual[-1].fcf if annual else None
+
+        # 종목 심볼만 입력해도 분석이 가능하도록, 현재가와 발행주식수는 명시 입력이
+        # 없을 때만 자동조회를 시도한다(있으면 그대로 존중 — 임의 대체 금지).
+        market_data_fetch_errors: list[str] = []
+        current_price = _optional_decimal("current_price", request.current_price)
+        if current_price is None:
+            current_price, price_error = _fetch_equity_price(request.asset_id, request.market)
+            if price_error is not None:
+                market_data_fetch_errors.append(price_error)
+        shares_outstanding = _optional_decimal("shares_outstanding", request.shares_outstanding)
+        if shares_outstanding is None:
+            shares_outstanding = annual[-1].shares_outstanding if annual else None
+            if shares_outstanding is None:
+                market_data_fetch_errors.append(
+                    "발행주식수 자동조회 실패(재무제표에 미포함) — 직접 입력하면 "
+                    "주당 적정가를 계산할 수 있다"
+                )
+
+        # 순부채도 이미 조회된 총부채·현금으로 계산 가능하므로, 명시 입력이 없을 때만
+        # 자동계산한다(항등식 기반 — 임의추정 아님. 0으로 방치하면 순부채가 큰 회사는
+        # 기업가치·주당가치가 왜곡된다).
+        net_debt = _optional_decimal("net_debt", request.net_debt)
+        if net_debt is None:
+            last_annual = annual[-1] if annual else None
+            if (
+                last_annual is not None
+                and last_annual.total_debt is not None
+                and last_annual.cash is not None
+            ):
+                net_debt = last_annual.total_debt - last_annual.cash
+            else:
+                net_debt = Decimal(0)
+                market_data_fetch_errors.append(
+                    "순부채 자동계산 실패(총부채·현금 미확보) — 0으로 처리, 직접 입력하면 반영된다"
+                )
+
+        dcf_payload: dict[str, Any] | None = None
+        dcf_score: Decimal | None = None
+        if base_fcf is not None:
+            try:
+                wacc = _required_decimal("wacc", request.wacc)
+                terminal_growth = _required_decimal("terminal_growth", request.terminal_growth)
+                if request.growth_path:
+                    growth_path = tuple(
+                        _required_decimal(f"growth_path[{i}]", g)
+                        for i, g in enumerate(request.growth_path)
+                    )
+                else:
+                    # 예측기간 성장률도 종목과 무관한 고정값 대신, 이미 계산된 과거 실측
+                    # 성장률(매출 3Y CAGR, 금융업은 총자산 3Y CAGR)에서 영구성장률까지
+                    # 선형으로 체감하는 경로를 자동 산출한다(임의추정 아님 — 회사 자신의
+                    # 과거 데이터를 근거로 삼는다). 과거 데이터 자체가 없으면 어쩔 수 없이
+                    # 일반적인 자리표시자 값을 쓰고, 그 사실을 명시한다.
+                    historical_cagr = (
+                        metrics.total_assets_cagr_3y
+                        if request.is_financial
+                        else metrics.revenue_cagr_3y
+                    )
+                    if historical_cagr is not None:
+                        steps = 5
+                        growth_path = tuple(
+                            historical_cagr + (terminal_growth - historical_cagr) * i / (steps - 1)
+                            for i in range(steps)
+                        )
+                    else:
+                        growth_path = tuple(
+                            Decimal(v) for v in ("0.10", "0.10", "0.08", "0.08", "0.08")
+                        )
+                        market_data_fetch_errors.append(
+                            "예측기간 성장률 자동산출 실패(과거 매출 CAGR 미확보) — "
+                            "일반적인 기본값(10/10/8/8/8%)을 사용했다, 직접 입력 권장"
+                        )
+                assumptions = DcfAssumptions(
+                    base_fcf=base_fcf,
+                    wacc=wacc,
+                    terminal_growth=terminal_growth,
+                    growth_path=growth_path,
+                    net_debt=net_debt,
+                    shares_outstanding=shares_outstanding,
+                    wacc_basis=request.wacc_basis,
+                )
+                dcf_report = CalculateDcf().execute(
+                    assumptions,
+                    current_price=current_price,
+                )
+                dcf_score = dcf_report.gap.score if dcf_report.gap is not None else None
+                dcf_payload = {
+                    # 순부채·성장경로가 자동산출된 경우 입력창에 그대로 채워 보여준다
+                    # (무엇이 자동으로 채워졌는지 투명하게 — current_price/shares_outstanding과
+                    # 동일한 원칙).
+                    "net_debt_used": str(net_debt),
+                    "growth_path_used": [_ratio_str(g) for g in growth_path],
+                    "fair_value_per_share": (
+                        _money_str(dcf_report.result.fair_value_per_share)
+                        if dcf_report.result.fair_value_per_share is not None
+                        else None
+                    ),
+                    # 발행주식수가 없어도 기업가치·자기자본가치는 유효하게 계산되므로
+                    # 항상 보여준다(trigger_zones 실패가 이 값들까지 지우지 않는다).
+                    "enterprise_value": _money_str(dcf_report.result.enterprise_value),
+                    "equity_value": _money_str(dcf_report.result.equity_value),
+                    "sensitivity_grid": {
+                        k: (_money_str(v) if v is not None else None)
+                        for k, v in dcf_report.sensitivity.items()
+                    },
+                    "trigger_zones": (
+                        {
+                            "buy_high_confidence_upper": _money_str(
+                                dcf_report.zones.buy_high_confidence_upper
+                            ),
+                            "buy_base_case_upper": _money_str(dcf_report.zones.buy_base_case_upper),
+                            "watch_lower": _money_str(dcf_report.zones.watch_lower),
+                            "watch_upper": _money_str(dcf_report.zones.watch_upper),
+                            "sell_25pct_lower": _money_str(dcf_report.zones.sell_25pct_lower),
+                            "sell_50pct_lower": _money_str(dcf_report.zones.sell_50pct_lower),
+                        }
+                        if dcf_report.zones is not None
+                        else None
+                    ),
+                    "trigger_zones_unavailable_reason": dcf_report.zones_unavailable_reason,
+                    "gap": (
+                        {
+                            "gap_ratio": str(dcf_report.gap.gap_ratio.quantize(Decimal("0.0001"))),
+                            "score": str(dcf_report.gap.score),
+                            "label": dcf_report.gap.label,
+                            "buy_price_condition_met": dcf_report.gap.buy_price_condition_met,
+                        }
+                        if dcf_report.gap is not None
+                        else None
+                    ),
+                }
+            except ValuationError as error:
+                dcf_payload = {"error": str(error)}
+
+        risk_deductions = tuple(
+            RiskDeduction(
+                reason=d.reason,
+                points=_required_decimal(f"risk_deductions.{d.reason}.points", d.points),
+                basis=d.basis,
+            )
+            for d in request.risk_deductions
+        )
+
+        try:
+            scoring_config = YamlScoringConfigLoader(
+                dashboard_service.config_dir / "equity_scoring" / "default.yaml"
+            ).load()
+        except ScoringConfigError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+
+        # PEG(=PER÷EPS성장률%)는 현재가·최근연도 EPS·EPS 3Y CAGR이 이미 조회·계산돼
+        # 있으면 새 데이터 없이도 산출 가능하다(항등식 기반 — 임의추정 아님).
+        peg = _optional_decimal("peg", request.peg)
+        if peg is None:
+            latest_eps = annual[-1].eps if annual else None
+            if (
+                current_price is not None
+                and latest_eps is not None
+                and latest_eps > 0
+                and metrics.eps_cagr_3y is not None
+                and metrics.eps_cagr_3y > 0
+            ):
+                implied_per = current_price / latest_eps
+                peg = implied_per / (metrics.eps_cagr_3y * 100)
+            else:
+                market_data_fetch_errors.append(
+                    "PEG 자동계산 실패(현재가·최근연도 EPS·EPS 3Y CAGR 중 일부 미확보 "
+                    "또는 0 이하) — 직접 입력하면 반영된다"
+                )
+
+        # PER/PBR 5년밴드 백분위는 과거 결산연도별 종가(Yahoo Finance 월단위 이력)와
+        # 이미 조회된 재무제표(EPS·자기자본·발행주식수)로 산출한다 — 종목 자신의
+        # 과거 밴드 내 현재 위치이지 업종 평균이 아니다(company_analysis_rules.md 3-4).
+        per_band_percentile = _optional_decimal("per_band_percentile", request.per_band_percentile)
+        pbr_band_percentile = _optional_decimal("pbr_band_percentile", request.pbr_band_percentile)
+        if per_band_percentile is None or pbr_band_percentile is None:
+            historical_prices = _fetch_historical_quotes(request.asset_id, request.market)
+            price_band = compute_price_band(
+                current_price=current_price, annual=annual, historical_prices=historical_prices
+            )
+            if per_band_percentile is None:
+                per_band_percentile = price_band.per_band_percentile
+            if pbr_band_percentile is None:
+                pbr_band_percentile = price_band.pbr_band_percentile
+            if price_band.per_band_percentile is None and price_band.pbr_band_percentile is None:
+                market_data_fetch_errors.append(
+                    f"PER/PBR 5년밴드 백분위 자동계산 실패: {price_band.note}"
+                )
+
+        relative_valuation = CalculateRelativeValuation(
+            config=scoring_config.relative_valuation
+        ).execute(
+            per_band_percentile=per_band_percentile,
+            pbr_band_percentile=pbr_band_percentile,
+            peg=peg,
+        )
+        # 세 입력이 전부 미제공(자동산출분 포함)이면 "0점짜리 상대지표"가 아니라
+        # DCF와 동일하게 미산출로 처리한다(데이터 누락을 숨기지 않는다).
+        relative_valuation_input_score = (
+            None
+            if per_band_percentile is None and pbr_band_percentile is None and peg is None
+            else relative_valuation.score
+        )
+
+        # 업종평균 대비 지표(매출총이익률·ROA·영업이익률순위)는 sync-industry가 미리
+        # 채워둔 업종분류 맵에서 같은 시장·같은 업종코드를 가진 다른 종목(피어)의
+        # 재무제표와 비교해 자동 산출한다 — 피어 종목코드를 이 코드가 지어내지 않는다.
+        industry_repository = JsonIndustryClassificationRepository(
+            storage_dir / "industry_map.json"
+        )
+        # sync-industry가 아직 실행되지 않았거나 피어를 찾지 못한 경우는 market_data
+        # 자동조회 "실패"가 아니라 아직 설정되지 않은 선택 기능일 뿐이다 — 매번
+        # fetch_errors에 안내를 반복하지 않는다(점수표의 "데이터 누락" 표시로 충분).
+        peer_comparison = CompareIndustryPeers(
+            classification_repository=industry_repository,
+            provider_for_market=_equity_financial_provider,
+        ).execute(
+            asset_id=request.asset_id,
+            market=request.market,
+            is_financial=request.is_financial,
+            target_metrics=metrics,
+        )
+
+        inputs = CompanyScoreInputs(
+            symbol=request.asset_id,
+            as_of=as_of(),
+            data_source=growth_report.financials.data_source,
+            is_financial=request.is_financial,
+            revenue_cagr_3y=None if request.is_financial else metrics.revenue_cagr_3y,
+            total_assets_cagr_3y=metrics.total_assets_cagr_3y if request.is_financial else None,
+            eps_cagr_3y=metrics.eps_cagr_3y,
+            industry_tam_cagr=_optional_decimal("industry_tam_cagr", request.industry_tam_cagr),
+            market_share_trend=request.market_share_trend,
+            gross_margin_vs_industry_pp=(
+                None
+                if request.is_financial
+                else (
+                    _optional_decimal(
+                        "gross_margin_vs_industry_pp", request.gross_margin_vs_industry_pp
+                    )
+                    if request.gross_margin_vs_industry_pp is not None
+                    else peer_comparison.gross_margin_vs_industry_pp
+                )
+            ),
+            roa_vs_industry_pp=(
+                (
+                    _optional_decimal("roa_vs_industry_pp", request.roa_vs_industry_pp)
+                    if request.roa_vs_industry_pp is not None
+                    else peer_comparison.roa_vs_industry_pp
+                )
+                if request.is_financial
+                else None
+            ),
+            entry_barrier_regulatory=request.entry_barrier_regulatory,
+            entry_barrier_capital_intensity=request.entry_barrier_capital_intensity,
+            entry_barrier_network_effect=request.entry_barrier_network_effect,
+            entry_barrier_basis=request.entry_barrier_basis,
+            # roe 미입력 시 자동조회된 재무제표에서 계산한 값을 쓴다(분모는 반드시
+            # controlling_interest_equity — total_equity/총자본 아님, growth_metrics.py 참조).
+            roe=(
+                _optional_decimal("roe", request.roe)
+                if request.roe is not None
+                else metrics.roe_latest
+            ),
+            # roic 미입력 시 자동조회된 재무제표에서 계산한 값을 쓴다(roe·debt_ratio와
+            # 동일한 자동조회 우선순위 원칙).
+            roic=(
+                _optional_decimal("roic", request.roic)
+                if request.roic is not None
+                else metrics.roic_latest
+            ),
+            wacc_estimate=_optional_decimal("wacc", request.wacc),
+            wacc_basis=request.wacc_basis,
+            op_margin_industry_rank=(
+                request.op_margin_industry_rank
+                if request.op_margin_industry_rank is not None
+                else peer_comparison.op_margin_industry_rank
+            ),
+            fcf_positive_years=metrics.fcf_positive_years,
+            # debt_ratio 미입력 시 자동조회된 재무제표(total_debt/total_equity)에서
+            # 계산한 값을 쓴다(roe와 동일한 자동조회 우선순위 원칙).
+            debt_ratio=(
+                None
+                if request.is_financial
+                else (
+                    _optional_decimal("debt_ratio", request.debt_ratio)
+                    if request.debt_ratio is not None
+                    else metrics.debt_ratio_latest
+                )
+            ),
+            dcf_valuation_score=dcf_score,
+            relative_valuation_score=relative_valuation_input_score,
+            risk_deductions=risk_deductions,
+        )
+
+        score_report = ScoreCompany(config=scoring_config).execute(inputs)
+        record_audit(
+            actor="user",
+            action="equity_score.computed",
+            detail=f"종목분석: {request.asset_id} 총점 {score_report.total_score}",
+            reason="웹 종목분석 요청",
+        )
+        return {
+            "score": _serialize_score_report(score_report),
+            "financials": _serialize_financials_result(growth_report.financials),
+            "market_data": {
+                "current_price": _money_str(current_price) if current_price is not None else None,
+                "shares_outstanding": (
+                    str(shares_outstanding) if shares_outstanding is not None else None
+                ),
+                "fetch_errors": market_data_fetch_errors,
+            },
+            "growth_metrics": {
+                "revenue_cagr_3y": _ratio_str(metrics.revenue_cagr_3y),
+                "revenue_cagr_3y_note": metrics.revenue_cagr_3y_note,
+                "eps_cagr_3y": _ratio_str(metrics.eps_cagr_3y),
+                "eps_cagr_3y_note": metrics.eps_cagr_3y_note,
+                "total_assets_cagr_3y": _ratio_str(metrics.total_assets_cagr_3y),
+                "total_assets_cagr_3y_note": metrics.total_assets_cagr_3y_note,
+                "fcf_positive_years": metrics.fcf_positive_years,
+                "fcf_positive_years_note": metrics.fcf_positive_years_note,
+                "roa_latest": _ratio_str(metrics.roa_latest),
+                "gross_margin_latest": _ratio_str(metrics.gross_margin_latest),
+                "roe_latest": _ratio_str(metrics.roe_latest),
+                "debt_ratio_latest": _ratio_str(metrics.debt_ratio_latest),
+                "roic_latest": _ratio_str(metrics.roic_latest),
+            },
+            "dcf": dcf_payload,
+            "relative_valuation": {
+                "score": str(relative_valuation.score),
+                "per_score": (
+                    str(relative_valuation.per_score)
+                    if relative_valuation.per_score is not None
+                    else None
+                ),
+                "pbr_score": (
+                    str(relative_valuation.pbr_score)
+                    if relative_valuation.pbr_score is not None
+                    else None
+                ),
+                "peg_adjustment": str(relative_valuation.peg_adjustment),
+                "missing": list(relative_valuation.missing),
+                "note": relative_valuation.note,
+                # peg·PER/PBR밴드가 자동산출된 경우 입력창에 그대로 채워 보여준다
+                # (net_debt_used와 동일한 투명성 원칙).
+                "peg_used": str(peg.quantize(Decimal("0.01"))) if peg is not None else None,
+                "per_band_percentile_used": _ratio_str(per_band_percentile),
+                "pbr_band_percentile_used": _ratio_str(pbr_band_percentile),
+            },
+            # 업종평균 대비 지표가 피어 비교로 자동산출된 경우 입력창에 채워 보여준다
+            # (net_debt_used·peg_used와 동일한 투명성 원칙).
+            "industry_peer_comparison": {
+                "peer_count": peer_comparison.peer_count,
+                "gross_margin_vs_industry_pp": _ratio_str(
+                    peer_comparison.gross_margin_vs_industry_pp
+                ),
+                "roa_vs_industry_pp": _ratio_str(peer_comparison.roa_vs_industry_pp),
+                "op_margin_industry_rank": peer_comparison.op_margin_industry_rank,
+            },
+        }
+
+    @app.post("/api/market-regime")
+    def compute_market_regime(request: MarketRegimeRequest) -> dict[str, Any]:
+        """시장 국면(4장 A~E) 판정. buy_rules.md B-1 조건2(시장 상태 C 이상)의 근거."""
+        try:
+            config = YamlMarketRegimeConfigLoader(
+                dashboard_service.config_dir / "market_regime" / "default.yaml"
+            ).load()
+        except RegimeConfigError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+
+        vix = _optional_decimal("vix", request.vix)
+        circuit_breaker = _optional_decimal("circuit_breaker", request.circuit_breaker)
+        fetch_errors: list[str] = []
+        # 명시 입력이 있으면 그대로 존중하고, 없을 때만 자동조회를 시도한다(임의 대체 금지).
+        if vix is None:
+            try:
+                vix = indicator_provider.fetch_vix()
+            except MarketRegimeProviderError as error:
+                fetch_errors.append(f"VIX 자동조회 실패: {error}")
+        if circuit_breaker is None:
+            try:
+                circuit_breaker = indicator_provider.fetch_kospi_change_pct()
+            except MarketRegimeProviderError as error:
+                fetch_errors.append(f"KOSPI 등락률 자동조회 실패: {error}")
+
+        observations: dict[str, Decimal | str | None] = {
+            "vix": vix,
+            "circuit_breaker": circuit_breaker,
+            "treasury_10y": request.treasury_10y,
+            "sp500_per": request.sp500_per,
+            "kospi_foreign_flow": request.kospi_foreign_flow,
+        }
+        result = GradeMarketRegime(config=config).execute(observations, as_of=as_of())
+        grade_text = result.final_grade.value if result.final_grade else "판단 보류"
+        record_audit(
+            actor="user",
+            action="market_regime.graded",
+            detail=f"시장국면 판정: {grade_text}",
+            reason="웹 시장분석 요청",
+        )
+        return {
+            "final_grade": result.final_grade.value if result.final_grade else None,
+            "tie_broken": result.tie_broken,
+            "action_guidance": result.action_guidance,
+            "buy_allowed": result.buy_allowed,
+            "fetch_errors": fetch_errors,
+            "grade_tally": {g.value: count for g, count in result.grade_tally.items()},
+            "indicator_grades": [
+                {
+                    "indicator": ig.indicator,
+                    "observed": ig.observed,
+                    "grade": ig.grade.value if ig.grade else None,
+                    "basis": ig.basis,
+                    "source": ig.source,
+                    "note": ig.note,
+                }
+                for ig in result.indicator_grades
+            ],
+        }
+
+    @app.post("/api/buy-gate")
+    def compute_buy_gate(request: BuyGateRequest) -> dict[str, Any]:
+        """매수 필수조건(buy_rules.md B-1) AND 게이트. 4개 조건 중 하나라도 미충족이면
+        매수 금지 — /api/equity-score·/api/market-regime 결과를 조립해 판정만 한다."""
+        total_score = _required_decimal("total_score", request.total_score)
+        score_met = total_score >= 80
+
+        market_grade = Grade(request.market_grade) if request.market_grade else None
+        market_met = market_grade is not None and market_grade.at_least_as_safe_as(Grade.C)
+        market_detail = market_grade.value if market_grade else "미확보(판단 보류 포함)"
+
+        gap_ratio = _optional_decimal("dcf_gap_ratio", request.dcf_gap_ratio)
+        price_met = gap_ratio is not None and gap_ratio <= Decimal("-0.10")
+        price_detail = "미확보" if gap_ratio is None else str(gap_ratio.quantize(Decimal("0.0001")))
+
+        # v1.6.1: DCF가 조건3을 충족시켜도 상대지표가 정반대(상단·richly-valued)면
+        # 조건은 그대로 통과시키되(자동 매수 금지 원칙은 어차피 전 조건에 적용됨)
+        # 그 불일치를 고지한다 — 근거 없는 확신을 있는 것처럼 보이지 않게 한다.
+        rel_score = _optional_decimal("relative_valuation_score", request.relative_valuation_score)
+        price_caution = None
+        if price_met and rel_score is not None and rel_score < Decimal("3"):
+            price_caution = (
+                f"DCF는 -10% 이상 할인이나 상대지표(PER/PBR/PEG) 점수가 {rel_score}/10로 낮다 "
+                "— 상대비교로는 저평가 신호가 약하다는 뜻이니 DCF 가정을 재점검하라"
+            )
+
+        result = evaluate_buy_gate(
+            score_condition_met=score_met,
+            score_detail=f"{total_score}점",
+            market_grade_condition_met=market_met,
+            market_grade_detail=market_detail,
+            price_discount_condition_met=price_met,
+            price_discount_detail=price_detail,
+            investment_thesis=request.investment_thesis,
+            price_discount_caution=price_caution,
+        )
+        record_audit(
+            actor="user",
+            action="buy_gate.evaluated",
+            detail=f"매수 게이트 판정: {'통과' if result.all_conditions_met else '미충족'}",
+            reason="웹 매수판정 요청",
+        )
+        return {
+            "all_conditions_met": result.all_conditions_met,
+            "conditions": [
+                {"condition": c.condition, "met": c.met, "detail": c.detail, "caution": c.caution}
+                for c in result.conditions
+            ],
+        }
+
+    @app.post("/api/liquidity-check")
+    def compute_liquidity_check(request: LiquidityCheckRequest) -> dict[str, Any]:
+        """유동성 스크리닝(portfolio_rules.md P-5). buy_rules.md B-3 체크리스트가
+        참조하는 매수 전 참고용 확인 — 자동 차단이 아니다."""
+        amount = _required_decimal(
+            "planned_first_tranche_amount", request.planned_first_tranche_amount
+        )
+        bars: tuple[DailyBar, ...] = ()
+        if isinstance(price_provider, DailyVolumeProvider):
+            candidates = (
+                (request.asset_id,)
+                if request.market == "US"
+                else (f"{request.asset_id}.KS", f"{request.asset_id}.KQ")
+            )
+            for symbol in candidates:
+                try:
+                    bars = price_provider.recent_daily_bars(symbol, days=20)
+                except MarketDataProviderError:
+                    continue
+                if bars:
+                    break
+        result = evaluate_liquidity(planned_first_tranche_amount=amount, daily_bars=bars)
+        liquidity_label = "충족" if result.sufficient else "미확인/미달"
+        record_audit(
+            actor="user",
+            action="liquidity_check.evaluated",
+            detail=f"{request.asset_id} 유동성 확인: {liquidity_label}",
+            reason="웹 매수판정 요청",
+        )
+        return {
+            "average_daily_trading_value": (
+                _money_str(result.average_daily_trading_value)
+                if result.average_daily_trading_value is not None
+                else None
+            ),
+            "required_minimum": (
+                _money_str(result.required_minimum) if result.required_minimum is not None else None
+            ),
+            "sufficient": result.sufficient,
+            "days_observed": result.days_observed,
+            "note": result.note,
+        }
+
+    def _serialize_tranche_plan(plan: TranchePlan) -> dict[str, Any]:
+        return {
+            "asset_id": plan.asset_id,
+            "first_tranche_price": str(plan.first_tranche_price),
+            "target_quantity": str(plan.target_quantity),
+            "baseline_total_score": str(plan.baseline.total_score),
+            "tranches_bought": plan.tranches_bought,
+            "created_at": plan.created_at.isoformat(),
+        }
+
+    @app.post("/api/tranche-plans")
+    def create_tranche_plan(request: CreateTranchePlanRequest) -> dict[str, Any]:
+        """분할매수 계획 등록(buy_rules.md B-2 1차 매수 시). 1차 매수를 실제로
+        실행한 뒤 호출한다 — 이 엔드포인트가 매수를 대신 실행하지 않는다."""
+        price = _required_decimal("first_tranche_price", request.first_tranche_price)
+        quantity = _required_decimal("target_quantity", request.target_quantity)
+        baseline = _score_snapshot_from_input(request.baseline_score)
+        try:
+            plan = TranchePlan(
+                asset_id=request.asset_id,
+                first_tranche_price=price,
+                target_quantity=quantity,
+                baseline=baseline,
+                tranches_bought=1,
+                created_at=as_of(),
+            )
+        except DomainError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        tranche_plan_repository.save(plan)
+        record_audit(
+            actor="user",
+            action="tranche_plan.created",
+            detail=f"{request.asset_id} 분할매수 계획 등록 (1차 {price}에 매수)",
+            reason="웹 매수판정 요청",
+        )
+        return _serialize_tranche_plan(plan)
+
+    @app.get("/api/tranche-plans")
+    def list_tranche_plans() -> list[dict[str, Any]]:
+        return [_serialize_tranche_plan(p) for p in tranche_plan_repository.load_all().values()]
+
+    @app.delete("/api/tranche-plans/{asset_id}")
+    def delete_tranche_plan(asset_id: str) -> dict[str, Any]:
+        tranche_plan_repository.delete(asset_id)
+        record_audit(
+            actor="user",
+            action="tranche_plan.deleted",
+            detail=f"{asset_id} 분할매수 계획 삭제",
+            reason="웹 매수판정 요청",
+        )
+        return {"deleted": asset_id}
+
+    @app.post("/api/tranche-plans/{asset_id}/advance")
+    def advance_tranche_plan(asset_id: str) -> dict[str, Any]:
+        """다음 분할매수를 실제로 실행했음을 기록한다(자동 매수 아님 — 사용자가
+        직접 실행한 뒤 이 엔드포인트로 상태만 갱신)."""
+        plan = tranche_plan_repository.get(asset_id)
+        if plan is None:
+            raise HTTPException(status_code=404, detail=f"{asset_id}: 등록된 분할매수 계획 없음")
+        if plan.tranches_bought >= 3:
+            raise HTTPException(status_code=400, detail=f"{asset_id}: 이미 3차까지 완료됨")
+        updated = TranchePlan(
+            asset_id=plan.asset_id,
+            first_tranche_price=plan.first_tranche_price,
+            target_quantity=plan.target_quantity,
+            baseline=plan.baseline,
+            tranches_bought=plan.tranches_bought + 1,
+            created_at=plan.created_at,
+        )
+        tranche_plan_repository.save(updated)
+        record_audit(
+            actor="user",
+            action="tranche_plan.advanced",
+            detail=f"{asset_id} {updated.tranches_bought}차 매수 실행 기록",
+            reason="웹 매수판정 요청",
+        )
+        return _serialize_tranche_plan(updated)
+
+    @app.post("/api/tranche-plans/{asset_id}/evaluate")
+    def evaluate_tranche_plan(asset_id: str, request: EvaluateTrancheRequest) -> dict[str, Any]:
+        """buy_rules.md B-2 2차/3차 판정 — 가격 트리거·데이터누락/논리훼손
+        구분(v1.6.1)."""
+        plan = tranche_plan_repository.get(asset_id)
+        if plan is None:
+            raise HTTPException(status_code=404, detail=f"{asset_id}: 등록된 분할매수 계획 없음")
+        price = _required_decimal("current_price", request.current_price)
+        current = _score_snapshot_from_input(request.current_score)
+        result = evaluate_tranche(plan=plan, current_price=price, current=current)
+        record_audit(
+            actor="user",
+            action="tranche_plan.evaluated",
+            detail=f"{asset_id} {plan.tranches_bought + 1}차 판정: {result.note}",
+            reason="웹 매수판정 요청",
+        )
+        return {
+            "next_tranche": result.next_tranche,
+            "price_drop_pct": str(result.price_drop_pct.quantize(Decimal("0.0001"))),
+            "price_trigger_met": result.price_trigger_met,
+            "total_score_drop": str(result.total_score_drop),
+            "real_score_drop": str(result.real_score_drop),
+            "logic_broken": result.logic_broken,
+            "data_gap_only": result.data_gap_only,
+            "recommended_amount_fraction": (
+                str(result.recommended_amount_fraction)
+                if result.recommended_amount_fraction is not None
+                else None
+            ),
+            "note": result.note,
+        }
+
+    @app.post("/api/sell-review")
+    def compute_sell_review(request: SellReviewRequest) -> dict[str, Any]:
+        """매도 판단 보조(sell_rules.md 5장). 신호를 드러낼 뿐 자동집행하지 않는다 —
+        실행 전 사용자 최종 확인 필수(S-4 체크리스트)."""
+        result = evaluate_sell_review(
+            revenue_yoy_growth_deceleration_pp=_optional_decimal(
+                "revenue_yoy_growth_deceleration_pp", request.revenue_yoy_growth_deceleration_pp
+            ),
+            market_share_declining_two_quarters=request.market_share_declining_two_quarters,
+            structural_disruption=request.structural_disruption,
+            structural_disruption_note=request.structural_disruption_note,
+            dcf_gap_ratio=_optional_decimal("dcf_gap_ratio", request.dcf_gap_ratio),
+        )
+        record_audit(
+            actor="user",
+            action="sell_review.evaluated",
+            detail=f"매도 검토: {'권고' if result.review_recommended else '해당 없음'}",
+            reason="웹 매도판정 요청",
+        )
+        return {
+            "review_recommended": result.review_recommended,
+            "thesis_break_triggered": result.thesis_break_triggered,
+            "suggested_sell_fraction": (
+                str(result.suggested_sell_fraction)
+                if result.suggested_sell_fraction is not None
+                else None
+            ),
+            "thesis_break_signals": [
+                {"reason": s.reason, "triggered": s.triggered, "detail": s.detail}
+                for s in result.thesis_break_signals
+            ],
+            "overvaluation_signal": {
+                "reason": result.overvaluation_signal.reason,
+                "triggered": result.overvaluation_signal.triggered,
+                "detail": result.overvaluation_signal.detail,
+            },
+        }
+
+    @app.get("/api/realized-performance")
+    def get_realized_performance() -> dict[str, Any]:
+        """실제 거래 원장(Transaction)을 FIFO로 랏 매칭해 실현 CAGR·MDD를 산출한다.
+        PositionLedger의 이동평균 회계와는 별개의 사후 성과분석 관점이다."""
+        _require_real_mode()
+        transactions = _transaction_repository().list_all()
+        report = ComputeRealizedPerformance().execute(transactions)
+        return {
+            "note": report.note,
+            "n_open_lots": report.n_open_lots,
+            "by_currency": [
+                {
+                    "currency": r.currency.value,
+                    "n_closed_lots": r.n_closed_lots,
+                    "total_cost": str(r.total_cost),
+                    "total_proceeds": str(r.total_proceeds),
+                    "total_realized_pnl": str(r.total_realized_pnl),
+                    "realized_return_pct": (
+                        str(r.realized_return_pct) if r.realized_return_pct is not None else None
+                    ),
+                    "capital_weighted_cagr": (
+                        _ratio_str(r.capital_weighted_cagr)
+                        if r.capital_weighted_cagr is not None
+                        else None
+                    ),
+                    "realized_pnl_drawdown_approx": (
+                        _ratio_str(r.realized_pnl_drawdown_approx)
+                        if r.realized_pnl_drawdown_approx is not None
+                        else None
+                    ),
+                }
+                for r in report.by_currency
+            ],
+            "skipped": [
+                {
+                    "transaction_id": s.transaction_id,
+                    "asset_id": s.asset_id,
+                    "trade_date": s.trade_date.isoformat(),
+                    "reason": s.reason,
+                }
+                for s in report.skipped
+            ],
+        }
 
     @app.get("/api/health")
     def health() -> dict[str, str]:

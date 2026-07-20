@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import csv
+import os
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -32,6 +33,7 @@ from pams.market_data.domain import QuoteProvider, SymbolMap
 from pams.market_data.infrastructure import (
     CsvFxLookup,
     CsvPriceLookup,
+    KisQuoteProvider,
     MarketDataFileWriter,
     YahooQuoteProvider,
 )
@@ -131,13 +133,33 @@ def load_symbol_map(project_root: Path) -> SymbolMap:
 def fetch_market_data(project_root: Path, provider: QuoteProvider | None = None) -> FetchResult:
     """외부 시세를 수집해 data/의 prices.csv/fx.csv/market.yaml에 기록한다.
 
-    provider 미지정 시 Yahoo Finance를 사용한다 (테스트는 페이크 주입).
+    provider 미지정 시 환경변수로 공급자를 고른다 (테스트는 페이크 주입).
     """
     symbols = load_symbol_map(project_root)
-    quote_provider = provider if provider is not None else YahooQuoteProvider()
+    quote_provider = provider if provider is not None else _quote_provider_from_env(project_root)
     result = FetchMarketData(provider=quote_provider).execute(symbols=symbols)
     MarketDataFileWriter(data_dir=project_root / "data").write(result)
     return result
+
+
+def _quote_provider_from_env(project_root: Path) -> QuoteProvider:
+    """KIS_APP_KEY/KIS_APP_SECRET이 있으면 한국투자증권을, 없으면 Yahoo Finance를 쓴다."""
+    app_key = os.environ.get("KIS_APP_KEY", "").strip()
+    app_secret = os.environ.get("KIS_APP_SECRET", "").strip()
+    if app_key and app_secret:
+        base_url = os.environ.get("KIS_BASE_URL", "").strip()
+        token_cache_path = project_root / "data" / ".kis_token.json"
+        if base_url:
+            return KisQuoteProvider(
+                app_key=app_key,
+                app_secret=app_secret,
+                base_url=base_url,
+                token_cache_path=token_cache_path,
+            )
+        return KisQuoteProvider(
+            app_key=app_key, app_secret=app_secret, token_cache_path=token_cache_path
+        )
+    return YahooQuoteProvider()
 
 
 def load_dca_plan(project_root: Path) -> DcaPlan:

@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from decimal import ROUND_HALF_UP, Decimal
 
-from pams.shared_kernel.domain import Money, Percentage
+from pams.shared_kernel.domain import Currency, Money, Percentage
+
+# 최소단위가 정수인 통화(원/엔)만 소수점 없이 표시하고, 나머지는 센트 단위까지 보여준다.
+_ZERO_DECIMAL_CURRENCIES: frozenset[Currency] = frozenset({Currency.KRW, Currency.JPY})
 
 ASSET_CLASS_LABELS: dict[str, str] = {
     "domestic_stock": "국내주식",
@@ -68,7 +71,8 @@ def asset_class_label(value: str) -> str:
 
 
 def format_money(money: Money) -> str:
-    return f"{money.round_to(0).amount:,.0f} {money.currency}"
+    places = 0 if money.currency in _ZERO_DECIMAL_CURRENCIES else 2
+    return f"{money.round_to(places).amount:,.{places}f} {money.currency}"
 
 
 def percent_value(value: Percentage | Decimal) -> str:

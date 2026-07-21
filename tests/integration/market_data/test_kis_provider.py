@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -36,6 +37,7 @@ class TestKisQuoteProvider:
             app_secret="secret",
             transport=httpx.MockTransport(handler),
             token_cache_path=token_cache_path,
+            min_request_interval_seconds=0,  # 테스트는 쓰로틀 없이 빠르게
         )
 
     def test_satisfies_port(self) -> None:
@@ -160,3 +162,23 @@ class TestKisQuoteProvider:
 
         quote = self.make(handler, token_cache_path=cache).latest_quote("005930")
         assert quote is not None
+
+    def test_throttles_between_requests_to_avoid_rate_limit(self) -> None:
+        """KIS의 '초당 거래건수를 초과하였습니다' 오류 재발 방지."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == _TOKEN_PATH:
+                return _token_response()
+            return httpx.Response(200, json={"rt_cd": "0", "output": {"stck_prpr": "75000"}})
+
+        provider = KisQuoteProvider(
+            app_key="key",
+            app_secret="secret",
+            transport=httpx.MockTransport(handler),
+            min_request_interval_seconds=0.05,
+        )
+        start = time.monotonic()
+        provider.latest_quote("005930")
+        provider.latest_quote("069500")
+        elapsed = time.monotonic() - start
+        assert elapsed >= 0.1  # 토큰요청+시세조회 x2 중 최소 두번은 대기해야 한다

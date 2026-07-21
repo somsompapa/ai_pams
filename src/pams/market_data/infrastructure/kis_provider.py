@@ -11,7 +11,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -47,6 +48,16 @@ class KisQuoteProvider:
     timeout_seconds: float = 15.0
     transport: httpx.BaseTransport | None = None  # 테스트 주입용
     token_cache_path: Path | None = None  # None이면 매 호출마다 새 토큰 발급
+    min_request_interval_seconds: float = 0.5  # KIS 초당 거래건수 제한 회피용 최소 요청 간격
+    _last_request_at: list[float] = field(default_factory=lambda: [0.0], compare=False)
+
+    def _throttle(self) -> None:
+        if self.min_request_interval_seconds <= 0:
+            return
+        wait = self.min_request_interval_seconds - (time.monotonic() - self._last_request_at[0])
+        if wait > 0:
+            time.sleep(wait)
+        self._last_request_at[0] = time.monotonic()
 
     def latest_quote(self, symbol: str) -> Quote | None:
         exchange, _, code = symbol.partition(":")
@@ -84,6 +95,7 @@ class KisQuoteProvider:
     def _get(self, path: str, *, tr_id: str, params: dict[str, str], symbol: str) -> dict[str, Any]:
         token = self._access_token(symbol=symbol)
         try:
+            self._throttle()
             with self._client() as client:
                 response = client.get(
                     path,
@@ -161,6 +173,7 @@ class KisQuoteProvider:
 
     def _request_token(self, *, symbol: str) -> tuple[str, int]:
         try:
+            self._throttle()
             with self._client() as client:
                 response = client.post(
                     _TOKEN_PATH,

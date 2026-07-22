@@ -51,7 +51,8 @@ from pams.market_data.infrastructure import (
 from pams.performance.domain import PerformanceHistory, ValuationPoint
 from pams.performance.infrastructure import JsonlValueHistoryRepository
 from pams.portfolio.application import BuildPortfolioSnapshot, RecordDailyValuation
-from pams.portfolio.infrastructure import CsvTransactionRepository
+from pams.portfolio.domain import HoldingsProvider
+from pams.portfolio.infrastructure import CsvTransactionRepository, TossHoldingsProvider
 from pams.risk.domain import ValueSeries
 from pams.shared_kernel.domain import Currency
 
@@ -272,4 +273,20 @@ def real_dashboard_service(project_root: Path) -> DashboardService:
         market_metrics=_market_metrics(data / "market.yaml"),
         benchmark_values=benchmark[0] if benchmark is not None else None,
         benchmark_history=benchmark[1] if benchmark is not None else None,
+        holdings_provider=_holdings_provider_from_env(project_root),
+    )
+
+
+def _holdings_provider_from_env(project_root: Path) -> HoldingsProvider | None:
+    """TOSS_CLIENT_ID/TOSS_CLIENT_SECRET이 있으면 토스증권 실계좌 잔고를 연결한다."""
+    client_id = os.environ.get("TOSS_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("TOSS_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        return None
+    data = project_root / "data"
+    return TossHoldingsProvider(
+        client_id=client_id,
+        client_secret=client_secret,
+        token_cache_path=data / ".toss_token.json",
+        account_cache_path=data / ".toss_account.json",
     )

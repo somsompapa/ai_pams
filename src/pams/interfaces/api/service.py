@@ -33,7 +33,10 @@ from pams.performance.domain import PerformanceHistory, PerformanceReport
 from pams.portfolio.application import BuildPortfolioSnapshot
 from pams.portfolio.domain import (
     AssetCatalog,
+    BrokerHolding,
+    BrokerProviderError,
     FxLookup,
+    HoldingsProvider,
     PortfolioSnapshot,
     PriceLookup,
     TransactionRepository,
@@ -55,6 +58,46 @@ from pams.risk.application import ComputeRiskReport
 from pams.risk.domain import RiskReport, ValueSeries
 from pams.risk.infrastructure import YamlRiskParametersLoader
 from pams.shared_kernel.domain import AssetClass, Currency, Money, Percentage
+
+
+def _broker_override(
+    holding: BrokerHolding,
+    *,
+    local_price: Money,
+    local_quantity: Decimal,
+    market_value_base: Money,
+) -> dict[str, Any]:
+    """실계좌 보유내역(holding)으로 주식 종목 표의 표시값을 재계산한다.
+
+    거래이력 기반 계산은 건드리지 않는다 - 이 함수의 결과는 표시용 dict의 일부
+    필드만 덮어쓰는 데 쓰인다. market_value_base는 기존 계산이
+    (local_price × local_quantity × 환율)로 만든 값이므로, 그 비율로 환율을
+    역산해 새 환율 조회 없이도 같은 통화 환산 기준을 유지한다.
+    """
+    quantity = holding.quantity
+    avg_price = holding.avg_price
+    current_price = holding.current_price
+    cost_amount = avg_price * quantity
+    market_value_local = current_price * quantity
+    unrealized_pnl_local = market_value_local - cost_amount
+    pnl_ratio = unrealized_pnl_local / cost_amount if cost_amount != 0 else Decimal(0)
+
+    local_denominator = local_price.amount * local_quantity
+    fx_rate = market_value_base.amount / local_denominator if local_denominator != 0 else Decimal(1)
+    market_value_base_amount = market_value_local * fx_rate
+    unrealized_pnl_base_amount = unrealized_pnl_local * fx_rate
+
+    return {
+        "quantity": format_number(quantity),
+        "avg_price": format_money(Money(avg_price, holding.currency)),
+        "current_price": format_money(Money(current_price, holding.currency)),
+        "market_value": format_money(Money(market_value_base_amount, market_value_base.currency)),
+        "unrealized_pnl": format_money(
+            Money(unrealized_pnl_base_amount, market_value_base.currency)
+        ),
+        "unrealized_percent": format_percent(pnl_ratio),
+        "unrealized_positive": unrealized_pnl_base_amount >= 0,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +124,9 @@ class DashboardService:
     market_metrics: dict[str, Decimal]  # 예: {"vix": Decimal("24.5")} - 시장 지표
     benchmark_values: ValueSeries | None = None  # 없으면 벤치마크 비교 지표 생략
     benchmark_history: PerformanceHistory | None = None
+    holdings_provider: HoldingsProvider | None = (
+        None  # 있으면 주식 종목 표시값을 실계좌 값으로 보강
+    )
 
     def compute(self, *, as_of: date, base_currency: Currency) -> EngineOutputs:
         """모든 엔진 유스케이스를 실행해 도메인 출력 묶음을 만든다.
@@ -404,6 +450,7 @@ class DashboardService:
             except PriceTriggerConfigError:
                 plan = None
 
+        broker_holdings = self._broker_holdings_by_symbol()
         total = snapshot.total_value.amount
         sleeve_total = sum((v.market_value_base.amount for v in equities), Decimal(0))
         rows: list[dict[str, Any]] = []
@@ -430,35 +477,55 @@ class DashboardService:
                 signal = "none"
                 label = "미설정"
                 buy_at = take_profit = stop_loss = "-"
-            rows.append(
-                {
-                    "asset_id": v.asset.asset_id,
-                    "name": v.asset.name,
-                    "asset_class": asset_class_label(v.asset.asset_class.value),
-                    "quantity": format_number(quantity),
-                    "avg_price": format_money(Money(avg_price, cost.currency)),
-                    "current_price": format_money(v.price),
-                    "market_value": format_money(v.market_value_base),
-                    "unrealized_pnl": format_money(v.unrealized_pnl_base),
-                    "unrealized_percent": format_percent(pnl_ratio),
-                    "unrealized_positive": v.unrealized_pnl_base.amount >= 0,
-                    "weight": percent_value(
-                        v.market_value_base.amount / total if total > 0 else Decimal(0)
-                    ),
-                    "sleeve_weight": percent_value(
-                        v.market_value_base.amount / sleeve_total
-                        if sleeve_total > 0
-                        else Decimal(0)
-                    ),
-                    "buy_trigger": buy_at,
-                    "take_profit": take_profit,
-                    "stop_loss": stop_loss,
-                    "signal": signal,
-                    "signal_label": label,
-                }
-            )
+            row = {
+                "asset_id": v.asset.asset_id,
+                "name": v.asset.name,
+                "asset_class": asset_class_label(v.asset.asset_class.value),
+                "quantity": format_number(quantity),
+                "avg_price": format_money(Money(avg_price, cost.currency)),
+                "current_price": format_money(v.price),
+                "market_value": format_money(v.market_value_base),
+                "unrealized_pnl": format_money(v.unrealized_pnl_base),
+                "unrealized_percent": format_percent(pnl_ratio),
+                "unrealized_positive": v.unrealized_pnl_base.amount >= 0,
+                "weight": percent_value(
+                    v.market_value_base.amount / total if total > 0 else Decimal(0)
+                ),
+                "sleeve_weight": percent_value(
+                    v.market_value_base.amount / sleeve_total if sleeve_total > 0 else Decimal(0)
+                ),
+                "buy_trigger": buy_at,
+                "take_profit": take_profit,
+                "stop_loss": stop_loss,
+                "signal": signal,
+                "signal_label": label,
+            }
+            ticker = v.asset.asset_id.rsplit(":", 1)[-1].upper()
+            holding = broker_holdings.get(ticker)
+            if holding is not None:
+                row.update(
+                    _broker_override(
+                        holding,
+                        local_price=v.price,
+                        local_quantity=quantity,
+                        market_value_base=v.market_value_base,
+                    )
+                )
+            rows.append(row)
         rows.sort(key=lambda r: r["name"])
         return rows
+
+    def _broker_holdings_by_symbol(self) -> dict[str, BrokerHolding]:
+        """증권사 API 실계좌 잔고를 심볼(대문자) 기준으로 조회.
+
+        실패 시 빈 딕셔너리(표시 저하 없이 무시).
+        """
+        if self.holdings_provider is None:
+            return {}
+        try:
+            return {h.symbol.upper(): h for h in self.holdings_provider.holdings()}
+        except BrokerProviderError:
+            return {}
 
     def _stock_allocation(
         self, snapshot: PortfolioSnapshot, base_currency: Currency

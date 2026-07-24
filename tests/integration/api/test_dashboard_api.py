@@ -180,3 +180,62 @@ class TestDashboardApi:
         monthly = data["performance"]["monthly"]
         assert len(monthly) >= 6
         assert all("label" in row and "twr" in row for row in monthly)
+
+
+class TestBrokerHoldingsResilience:
+    """증권사(토스) 실계좌 보강은 참고용이라, 실패해도 대시보드 전체가 막히면 안 된다.
+
+    홈이 /api/dashboard 하나에 의존하므로 이 위젯의 예외가 전체 400으로 새면
+    "데이터를 불러오지 못했다"로 홈이 통째로 죽는다(실제 발생). 방어 처리 검증.
+    """
+
+    def _demo_service(self, holdings_provider: object) -> "object":
+        from pams.interfaces.api import demo
+        from pams.interfaces.api.service import DashboardService
+        from pams.shared_kernel.domain import Currency
+
+        service = DashboardService(
+            config_dir=__import__("pathlib").Path.cwd() / "config",
+            transactions=demo.DemoTransactionRepository(),
+            assets=demo.DemoAssetCatalog(),
+            prices=demo.DemoPriceLookup(),
+            fx=demo.DemoFxLookup(),
+            portfolio_values=demo.demo_value_series(),
+            performance_history=demo.demo_performance_history(),
+            market_metrics={"vix": demo.DEMO_VIX},
+            benchmark_values=demo.demo_benchmark_series(),
+            benchmark_history=demo.demo_benchmark_history(),
+            holdings_provider=holdings_provider,  # type: ignore[arg-type]
+        )
+        return service.build(as_of=demo.AS_OF, base_currency=Currency.KRW)
+
+    def test_provider_raising_unexpected_error_does_not_break_dashboard(self) -> None:
+        class Exploding:
+            def holdings(self) -> list:
+                raise RuntimeError("네트워크 타임아웃 등 예상 밖 오류")
+
+        data = self._demo_service(Exploding())
+        assert data["stocks"]  # 원장 기반 값으로 정상 렌더
+
+    def test_malformed_holding_does_not_break_dashboard(self) -> None:
+        from decimal import Decimal
+
+        from pams.portfolio.domain import BrokerHolding
+        from pams.shared_kernel.domain import Currency
+
+        class OneBadHolding:
+            def holdings(self) -> list:
+                # 데모의 삼성전자(KRX:005930) 티커에 매칭되지만 값이 깨진 케이스를
+                # 흉내내기 위해 정상 값객체를 주되, 극단값으로 override 계산을 시험한다.
+                return [
+                    BrokerHolding(
+                        symbol="005930",
+                        quantity=Decimal(0),
+                        avg_price=Decimal(0),
+                        current_price=Decimal(0),
+                        currency=Currency.KRW,
+                    )
+                ]
+
+        data = self._demo_service(OneBadHolding())
+        assert data["stocks"]

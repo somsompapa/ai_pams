@@ -34,7 +34,6 @@ from pams.portfolio.application import BuildPortfolioSnapshot
 from pams.portfolio.domain import (
     AssetCatalog,
     BrokerHolding,
-    BrokerProviderError,
     FxLookup,
     HoldingsProvider,
     PortfolioSnapshot,
@@ -503,14 +502,18 @@ class DashboardService:
             ticker = v.asset.asset_id.rsplit(":", 1)[-1].upper()
             holding = broker_holdings.get(ticker)
             if holding is not None:
-                row.update(
-                    _broker_override(
-                        holding,
-                        local_price=v.price,
-                        local_quantity=quantity,
-                        market_value_base=v.market_value_base,
+                try:
+                    row.update(
+                        _broker_override(
+                            holding,
+                            local_price=v.price,
+                            local_quantity=quantity,
+                            market_value_base=v.market_value_base,
+                        )
                     )
-                )
+                except Exception:
+                    # 참고용 보강이므로 한 종목 계산이 실패해도 원장 값으로 표시하고 넘어간다.
+                    pass
             rows.append(row)
         rows.sort(key=lambda r: r["name"])
         return rows
@@ -524,7 +527,9 @@ class DashboardService:
             return {}
         try:
             return {h.symbol.upper(): h for h in self.holdings_provider.holdings()}
-        except BrokerProviderError:
+        except Exception:
+            # 증권사 API 장애·타임아웃 등 어떤 실패도 대시보드 전체를 막지 않는다.
+            # (참고용 보강 위젯이라 실패 시 원장 값으로 조용히 폴백한다.)
             return {}
 
     def _stock_allocation(
